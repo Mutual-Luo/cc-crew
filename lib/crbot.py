@@ -96,12 +96,15 @@ class Feishu:
         self.jobs = queue.Queue()
         self.slot_lock = threading.Lock()
         self.after = {}                              # “思考中”卡片 id -> 它下面又来了几条消息（被刷上去多少）
+        self.merges = {}                             # 员工 -> 它这 10 分钟的汇报卡片 {"mid", "t0", "after", "entries"}
 
     def bump(self):
         """又多了一条消息：固定卡片又往上被刷了一格。"""
         with self.slot_lock:
             for k in self.after:
                 self.after[k] += 1
+            for v in list(self.merges.values()):   # 监控线程同时在改：先拷一份再数
+                v["after"] += 1
             slots = crcore.load_json(SLOTS, {})
             if slots:
                 for v in slots.values():
@@ -124,6 +127,18 @@ class Feishu:
             crcore.save_json(SLOTS, slots)
         if cur:
             self.recall(cur["mid"])
+
+    def merge(self, card):
+        """汇报 / 进展：同一个员工 10 分钟内的并进它上一张（原地更新，飞书不响）；上一张已经被两条以上的消息
+        刷上去了、并了 8 条了、或者这条太长要分几张发，就照常发新的。"""
+        info, cur = card.merge, self.merges.get(card.merge["name"])
+        if (cur and time.time() - cur["t0"] < crcore.MERGE_SECS and cur["after"] <= 2 and len(cur["entries"]) < 8
+                and not card.more and self.patch(cur["mid"], crcore.merged_card(cur["entries"], card))):
+            cur["entries"].append(info)
+            return
+        mid = self.send(card)
+        if mid:
+            self.merges[info["name"]] = {"mid": mid, "t0": time.time(), "after": 0, "entries": [info]}
 
     def recall(self, mid):
         from lark_oapi.api.im.v1 import DeleteMessageRequest
@@ -219,6 +234,7 @@ class Feishu:
                 self.bump()
             if m and mid:
                 remember(mid, m.group(1))
+                self.merges.pop(m.group(1), None)    # 它有别的卡片发在后面了：下一条汇报另起一张，不往上面的旧卡片里塞
         for extra in getattr(reply, "more", []):      # 太长的回复：接着发「续」卡片
             self.send(extra)
         return first_id
@@ -459,6 +475,9 @@ class Feishu:
         while True:
             job = self.jobs.get()
             try:
+                if isinstance(job, tuple):            # 你发了消息 / 点了按钮：你醒着，夜里也照常推
+                    with lock:
+                        remote.saw_you()
                 if isinstance(job, tuple) and job[0] == "files":
                     _, mid, files, text, name = job
                     got = [self.download(mid, kind, key, fname) for kind, key, fname in files]
@@ -599,9 +618,10 @@ def monitor_loop(feishu):
                     log.info("通知 [%s]", item["kind"])
                     if not feishu:
                         continue
-                    msg = crcore.Card(item["card"], item["text"]) if item.get("card") else item["text"]
-                    if item.get("more"):
-                        msg.more = [crcore.Card(c, "") for c in item["more"]]
+                    msg = crcore.as_card(item) if item.get("card") else item["text"]
+                    if item.get("merge"):
+                        feishu.merge(msg)
+                        continue
                     if item.get("slot"):
                         feishu.put_slot(item["slot"], msg, item.get("minor", False))
                         continue

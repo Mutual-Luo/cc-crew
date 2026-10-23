@@ -111,4 +111,32 @@ check("cr status 能跑", "机器人" in st and "看门狗" in st, st)
 check("cr 通知（还没有）", "还没有" in crcli.notices(5) or crcli.notices(5) == "", crcli.notices(5))
 check("帮助文字", "助手" in str(crcore.Remote().handle("帮助")))
 
+# 5. 降噪：只有真要你选的才算拍板；夜里不用你拍板的攒着；同一个员工的汇报合成一张
+check("问选哪个算拍板", crcore.is_decision("两个方案：\nA. 改成直观版\nB. 去掉这张图\n你选哪个？"))
+check("要你贴日志不算拍板", crcore.ask_kind("你把 nvidia-smi 的输出贴给我？")[0] == "info"
+      and not crcore.is_decision("你把 nvidia-smi 的输出贴给我？"))
+proj = os.path.join(CLAUDE_DIR, "projects", "p")
+os.makedirs(proj)
+with open(os.path.join(proj, "s.jsonl"), "w", encoding="utf-8") as f:   # 6 天里每天 10 点、22 点各说一句话
+    for d in range(6):
+        for hour in (10, 22):
+            t = time.mktime(time.localtime(time.time() - (d + 1) * 86400)[:3] + (hour, 0, 0, 0, 0, -1))
+            stamp = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(t))
+            f.write(json.dumps({"type": "user", "timestamp": stamp, "message": {"role": "user", "content": "继续"}}) + "\n")
+check("按说话的钟点算夜里", crcore.learn_night() == [23, 9], crcore.learn_night())
+r = crcore.Remote()
+r.state.update(seen_you=0, held=0, night={"day": time.strftime("%Y-%m-%d"), "hours": [time.localtime().tm_hour, (time.localtime().tm_hour + 1) % 24]})
+check("夜里、你没在用：免打扰", r.quiet_now())
+report = crcore.alert("📝【exp】：汇报", "跑完了", "orange")
+report.merge = {"name": "exp", "label": "📝 汇报", "body": "跑完了", "t": time.time()}
+r.push(report, "idle")
+r.push(crcore.alert("🙋【exp】：老板，需要你拍板", "选哪个？", "carmine"), "idle", must=True)
+check("拍板照推，汇报攒着", r.state["held"] == 1 and "拍板" in crcli.notices(5) and "汇报" not in crcli.notices(5), crcli.notices(5))
+r.push(report, "idle")
+out = r.release_held()
+check("攒下的点了再发，同一个员工合成一张", "攒下的 2 条" in out.text and len(out.more) == 1
+      and "（2 条）" in out.more[0].card["header"]["title"]["content"], [m.card["header"]["title"] for m in out.more])
+r.state["seen_you"] = time.time()
+check("你刚动过：不算夜里", not r.quiet_now())
+
 print(f"\n全部通过：{len(passed)} 项")
