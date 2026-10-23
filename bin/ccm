@@ -1,0 +1,6 @@
+#!/bin/sh
+# ccm：代替 claude 的启动器，机器人能看屏幕、替你打字（不用 tmux）。用法：ccm [claude 参数…]
+here=$(cd "$(dirname "$0")/.." && pwd)
+py="$here/venv/bin/python"
+[ -x "$py" ] || py=$(command -v python3 || command -v python)
+exec "$py" "$here/lib/ccterm.py" "$@"

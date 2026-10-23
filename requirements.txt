@@ -1,0 +1,4 @@
+lark-oapi
+psutil
+pyte
+pywinpty; sys_platform == "win32"

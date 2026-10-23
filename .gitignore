@@ -1,0 +1,19 @@
+# 本机数据和密钥：绝不提交
+config.env
+feishu.env
+env.sh
+data/
+logs/
+venv/
+tmux.sock
+assistant-prompt.md
+assistant-prompt.local.md
+# 这台机器自己的启动脚本（示例在 examples/）
+bin/claude-launch.sh
+bin/claude-inner.sh
+# 备份
+*.bak-*
+lib.prev/
+bin.prev/
+bin.next/
+__pycache__/

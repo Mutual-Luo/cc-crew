@@ -1,0 +1,49 @@
+# 在 Linux / macOS / Windows 上跑测试：ccm 启动器（假 claude）和机器人核心的冒烟测试。
+# 不需要飞书凭证，也不会启动真的 claude。
+name: test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11"]
+        include:
+          - os: ubuntu-latest
+            python: "3.9"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: 装依赖
+        run: python -m pip install -r requirements.txt
+
+      - name: 语法检查
+        shell: bash
+        run: python -c "import ast,sys; [ast.parse(open(f,encoding='utf-8').read(),f) for f in sys.argv[1:]]" lib/*.py lib/tests/*.py install.py
+
+      - name: ccm 测试（Linux / macOS）
+        if: runner.os != 'Windows'
+        run: python lib/tests/test_ccterm.py
+
+      - name: ccm 测试（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python lib/tests/test_ccterm_win.py
+
+      - name: 机器人核心冒烟测试
+        run: python lib/tests/test_core_smoke.py

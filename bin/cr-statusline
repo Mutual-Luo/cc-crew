@@ -1,0 +1,59 @@
+#!/usr/bin/env -S python3 -S
+# Claude Code 的状态栏命令（settings.json 的 statusLine）。做两件事：
+# 1. 把 Claude Code 交给状态栏的原始数据（模型、思考程度、上下文用量、5 小时 / 7 天额度）记到 data/status/<会话>.json，
+#    飞书卡片从这里读，不管你的状态栏显示成什么样（或者根本不显示这些）都准；
+# 2. 再把同样的数据交给你原来的状态栏命令（data/statusline-orig.txt 里那一行）去显示，显示效果和原来一模一样。
+#    没有原来的命令就什么都不显示（和没设状态栏一样）。
+# 只用标准库、不联网；出任何错都不影响显示。
+import json, os, re, subprocess, sys, time
+DATA = os.environ.get("CLAUDE_MONITOR_DATA") or os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "data")
+raw = sys.stdin.read()
+try:
+    with open(f"{DATA}/statusline-orig.txt", encoding="utf-8") as f:
+        cmd = f.read().strip()
+except OSError:
+    cmd = ""
+show = None
+if cmd:                                                  # 先让原来的状态栏跑起来，同时记数据，不多等
+    try:
+        show = subprocess.Popen(cmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, text=True)
+    except Exception:
+        pass
+
+
+def get(o, *path):
+    for k in path:
+        o = o.get(k) if isinstance(o, dict) else None
+    return o
+
+
+try:
+    d = json.loads(raw)
+    sid = str(d.get("session_id", ""))
+    if re.fullmatch(r"[0-9a-fA-F-]{8,64}", sid):
+        rec = {"model": get(d, "model", "display_name") or get(d, "model", "id"),
+               "effort": get(d, "effort", "level"),
+               "ctx": get(d, "context_window", "used_percentage"),
+               "5h": get(d, "rate_limits", "five_hour", "used_percentage"),
+               "7d": get(d, "rate_limits", "seven_day", "used_percentage")}
+        path = f"{DATA}/status/{sid}.json"
+        try:
+            with open(path, encoding="utf-8") as f:
+                old = json.load(f)
+        except (OSError, ValueError):
+            old = {}
+        if {k: old.get(k) for k in rec} != rec:          # 没变就不写，状态栏刷新很频繁
+            rec["t"] = time.time()
+            os.makedirs(f"{DATA}/status", exist_ok=True)
+            with open(path + ".tmp", "w", encoding="utf-8") as f:
+                json.dump(rec, f)
+            os.replace(path + ".tmp", path)
+except Exception:
+    pass
+
+if show:
+    try:
+        sys.stdout.write(show.communicate(raw, timeout=10)[0])
+    except Exception:
+        pass

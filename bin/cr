@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# cr：和飞书里说的一样的命令（cr 看看、cr @3 内容…），以及 cr start / stop / status。详见 lib/crcli.py。
+here=$(cd "$(dirname "$0")/.." && pwd)
+[ -f "$here/env.sh" ] && . "$here/env.sh"        # 本机自己的环境（比如代理、隔离的 HOME），可选
+py="$here/venv/bin/python"
+[ -x "$py" ] || py=$(command -v python3 || command -v python)
+exec "$py" "$here/lib/crcli.py" "$@"

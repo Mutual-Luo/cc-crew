@@ -1,0 +1,3 @@
+#!/bin/sh
+# 老命令名，等同于 cr stop
+exec "$(dirname "$0")/cr" stop "$@"
