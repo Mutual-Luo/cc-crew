@@ -54,6 +54,7 @@ CARD_CHARS = 6000           # 一张飞书卡片放这么多字（卡片上限�
 MERGE_SECS = 10 * 60        # 同一个员工 10 分钟内的汇报 / 进展合成一张卡片：原地更新，手机只响第一次
 QUIET_HOURS = os.environ.get("CLAUDE_MONITOR_QUIET_HOURS", "auto").strip()   # 夜里免打扰：auto（按你平时几点用 Claude 算）/ off / 1-8
 AWAKE_SECS = 30 * 60        # 你这么久以内动过（发消息、点按钮、在电脑上跟 Claude 说话）：夜里也照常推
+CARD_GRACE = 8              # 你刚发了话 / 点了按钮：飞书那边还在登记“思考中”卡片，监控先别抢着另发一张回复
 HOLD_KINDS = ("idle", "stuck", "hire", "peer", "limit", "dead", "slash", "proxy")   # 夜里可以先攒着的通知（要你拍板的除外）
 DEFAULT_NEW_ARGS = ["--dangerously-skip-permissions"]
 
@@ -749,6 +750,28 @@ def is_human(e):
     return bool(text.strip()) and not text.lstrip().startswith(("<", "[Request interrupted"))
 
 
+def last_human_text(session_id):
+    """这段对话里你最后说的那句话（电脑上打的或机器人替你发的）；找不到返回 ""。"""
+    path = transcript_path(session_id) if session_id else None
+    if not path:
+        return ""
+    with open(path, "rb") as f:
+        f.seek(max(0, os.path.getsize(path) - (2 << 20)))
+        lines = f.read().decode("utf-8", "replace").splitlines()
+    for line in reversed(lines):
+        if '"user"' not in line:
+            continue
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if is_human(e):
+            c = e["message"]["content"]
+            return (c if isinstance(c, str) else "".join(
+                b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")).strip()
+    return ""
+
+
 def learn_night(days=21):
     """你一般几点睡：最近 days 天里，每个钟点有几天你跟 Claude 说过话。说话的日子不到五分之一的钟点算「睡了」，
     取连着凌晨 3 点（或 4、2、5 点）的那一段，最长 10 小时。返回 [开始, 结束) 的整点；夜里也常用的返回 None；
@@ -889,6 +912,37 @@ def dialog_options(rows):
         if m and int(m.group(1)) == len(opts) + 1:
             opts.append((len(opts) + 1, m.group(2).strip()))
     return opts
+
+
+SAFEGUARD_WHAT = (("non-cybersecurity", "有时会把正常的问题误当成网络攻击类的内容拦下"),
+                  ("biology", "跟生物研究沾边的正常问题有时也会被拦下"))
+
+
+def builtin_question(q):
+    """Claude Code 自己弹的英文框（不是 Claude 在问你）：安全检查拦下了回答，问要不要换个模型接着答。
+    翻成中文：{"title", "intro", "ask", "model", "options": [(选项, 选了会怎样, "switch" / "stay" / None)]}；别的框返回 None。"""
+    text = q.get("question", "")
+    m = re.search(r"([\w .\-]+?)'s safeguards", text)
+    if not m:
+        return None
+    opts = q.get("options") or []
+    fb = re.search(r"Switch to (.+?) and keep going", text) or next(
+        (x for o in opts if (x := re.search(r"Continue on (.+?) now", o.get("description", "")))), None)
+    fb = fb.group(1).strip() if fb else "别的模型"
+    out = []
+    for o in opts:
+        label, desc = o.get("label", ""), o.get("description", "")
+        later = ("以后再被拦也自动换，不再问你（可以在 /config 改回来）" if "without asking" in desc
+                 else "以后再被拦还会问你" if "each time" in desc else "")
+        if label.startswith(("Switch", "Continue")):
+            out.append((f"换 {fb} 接着答", "；".join(x for x in (f"现在就用 {fb} 接着答", later) if x), "switch"))
+        elif label.startswith("Stay") or desc.startswith("Stop"):
+            out.append(("不换，先停下", "；".join(x for x in ("这次就不答了，你那段话会退回它的输入框", later) if x), "stay"))
+        else:
+            out.append((label, desc, None))
+    what = next((cn for en, cn in SAFEGUARD_WHAT if en in text), "有时会误拦正常的问题")
+    return {"title": "回答被安全检查拦下了", "model": m.group(1).strip(), "options": out, "ask": f"要不要换 {fb} 接着答？",
+            "intro": f"{m.group(1).strip()} 的安全检查把刚才那次回答停下了。这个检查管得比较严，{what}。"}
 
 
 def screen_menu(rows):
@@ -1032,6 +1086,33 @@ def _input_box(rows):
     """输入框上下两条横线的位置；找不到返回 None。"""
     seps = [i for i, r in enumerate(rows) if len(r) > 20 and set(r) <= set("─━")]
     return (seps[-2], seps[-1]) if len(seps) >= 2 else None
+
+
+def box_text(rows):
+    """输入框里还没发出去的字；空的、找不到输入框返回 ""。停在选择框上时别用（那时最后两条横线是框的边）。"""
+    box = _input_box(rows)
+    text = "\n".join(r for r in rows[box[0] + 1:box[1]] if r) if box else ""
+    return text[1:].strip() if text.startswith("❯") else ""
+
+
+def same_start(a, b, n=30):
+    """两段话开头一样（不管换行、空格）：屏幕上折了行的输入框也能跟原话对上。"""
+    a, b = re.sub(r"\s+", "", a or ""), re.sub(r"\s+", "", b or "")
+    n = min(n, len(a), len(b))
+    return n >= 4 and a[:n] == b[:n]
+
+
+def clear_box(s):
+    """清掉输入框里没发出去的字，像在电脑上按一下 Ctrl+C；清干净了返回 True。
+    本来就空的不按：空输入框连按两下 Ctrl+C 会退出 claude。"""
+    if not box_text(pane_rows(s)):
+        return True
+    crterm.key(s, "C-c")
+    for _ in range(8):
+        time.sleep(0.25)
+        if not box_text(pane_rows(s)):
+            return True
+    return False
 
 
 def slash_catalog(s):
@@ -1975,7 +2056,10 @@ class Remote:
             self.state.setdefault("asked_note", {})[name] = [sent_at, f"回答：{body}"]
             self.state.get("asking", {}).pop(name, None)
         else:
-            send_text(s, body, files)
+            left = box_text(rows) if not s.get("waiting") else ""
+            if left and same_start(left, last_human_text(s.get("sessionId"))) and not clear_box(s):
+                return self.screen_card(name, s, note="⚠️ 它的输入框里还有上一句退回来的话，没清掉，你这句没有发（不然会接在后面一起发出去）。")
+            send_text(s, body, files)                         # ↑ 被拦下、被打断后退回输入框的上一句：先清掉，不跟你这句粘在一起
             self.state.get("asking", {}).pop(name, None)     # 你回它了：不再算「待拍板」
             if files:
                 self.state.pop("attach", None)
@@ -2259,6 +2343,8 @@ class Remote:
             return err
         if op == "heldmsg" and len(words) > 2:
             return self.held_answer(name, s, words[2])
+        if op == "box" and len(words) > 2:              # 〔重新发〕〔清掉〕：退回输入框的那段话
+            return self.box_cmd(name, s, words[2])
         if op == "fire":
             return self.cmd_fire(name, s, reg) if words[2:3] == ["yes"] else self.fire_card(name, s)
         if op == "stop":
@@ -2326,6 +2412,48 @@ class Remote:
 
     # ------------------------------------------------------------ 它停下来问你：选择题、要权限
 
+    def stayed_card(self, name, s, model):
+        """安全检查拦下回答、你选了「不换」：它不会接着干，这张卡片原地换成「这次没答」，你那段话退回了输入框就说清楚。"""
+        for _ in range(10):                             # 等框收起来，退回的那段话出现在输入框里
+            time.sleep(0.3)
+            rows = pane_rows(s)
+            if not dialog_options(rows):
+                break
+        left = box_text(rows)
+        buttons = [_button("看屏幕", f"屏 {name}")]
+        if left and same_start(left, last_human_text(s.get("sessionId"))):
+            body = (f"你那段话退回到了它的输入框里，还没发出去：\n<font color='grey'>「{one_line(left, 60)}」</font>\n\n"
+                    "想再试一次就点〔重新发〕（可能还会被拦）；想换个说法，直接打字发给它就行，输入框里那段会先清掉。")
+            buttons = [_button("重新发", f"#box {name} send", "primary"), _button("清掉", f"#box {name} clear")] + buttons
+        else:
+            body = "它停在这里，等你下一句。"
+        card = alert(f"⏸【{name}】这次没答，还是用 {model}", "\n".join(x for x in (self.who(name, s), body) if x), "grey", buttons)
+        card.in_place = True
+        return card
+
+    def box_cmd(self, name, s, how):
+        """〔重新发〕〔清掉〕：退回输入框的那段话。先确认输入框里还是它，再按键。"""
+        left = box_text(pane_rows(s)) if not s.get("waiting") and s["status"] != "busy" else ""
+        if not left or not same_start(left, last_human_text(s.get("sessionId"))):
+            card = alert(f"✅【{name}】输入框已经变了", "那段话已经不在输入框里了（可能你在电脑上处理过），这次没有按任何键。", "grey",
+                         [_button("看屏幕", f"屏 {name}")])
+            card.in_place = True
+            return card
+        if how == "clear":
+            ok = clear_box(s)
+            card = alert(f"🧹【{name}】输入框清掉了" if ok else f"⚠️【{name}】没清掉", "刚才那段没有发。接下来直接打字发给它就行。" if ok
+                         else "按了一下 Ctrl+C，输入框里还有字。点〔看屏幕〕看看。", "grey" if ok else "yellow", [_button("看屏幕", f"屏 {name}")])
+            card.in_place = True
+            return card
+        crterm.key(s, "Enter")
+        since = now()
+        self.state["remote_pending"][name] = since
+        self.state.setdefault("typed_at", {})[name] = since
+        self.save()
+        card = self.live_card(name, s, since)
+        card.pending_for, card.in_place = name, True
+        return card
+
     def ask_card(self, name, s, qi=0, pt=None, note=""):
         """它在问你（选择题）或要你批准（权限）：题目、选项、它前面说的话都发过来，一个选项一个按钮。
         找不到可显示的内容（屏幕上也没有选择框）就返回 None。"""
@@ -2343,9 +2471,17 @@ class Remote:
         if not context and above_dialog(rows):
             context = f"<font color='grey'>它前面说的（屏幕上能看到的部分）：</font>\n{above_dialog(rows)}"
         lines, buttons = [], []
-        if b.get("name") == "AskUserQuestion":
+        qs = (inp.get("questions") or []) if b.get("name") == "AskUserQuestion" else []
+        built = builtin_question(qs[0]) if len(qs) == 1 else None
+        if built:                                       # Claude Code 自己的框：中文说明，不贴屏幕上的英文和你自己那段话
+            title, color = f"🛡️【{name}】{built['title']}", "orange"
+            asked = last_human_text(s.get("sessionId"))
+            lines = [built["intro"]] + ([f"<font color='grey'>你问的：「{one_line(asked, 60)}」</font>"] if asked else [])
+            lines += ["", f"**{built['ask']}**"] + [f"· **{cn}**：{desc}" if desc else f"· **{cn}**" for cn, desc, _ in built["options"]]
+            buttons = [_button(cn, f"#pick {name} {tid} 0 {k}") for k, (cn, _, _) in enumerate(built["options"], 1)]
+            context, hint, text_opts = "", "", "\n".join(lines)
+        elif b.get("name") == "AskUserQuestion":
             title, color = f"❓【{name}】在问你", "orange"
-            qs = inp.get("questions") or []
             qi = min(int(qi), max(len(qs) - 1, 0))
             for i, q in enumerate(qs):
                 mark = "✅ " if i < qi else ("👉 " if len(qs) > 1 and i == qi else "")
@@ -2357,7 +2493,7 @@ class Remote:
                 lines.append("")
             q = qs[qi] if qs else {}
             if q and not q.get("multiSelect"):
-                buttons = [_button(f"{k}. {one_line(o.get('label', '').replace('(Recommended)', '（推荐）'), 16)}",
+                buttons = [_button(f"{k}. {one_line(o.get('label', '').replace('(Recommended)', '（推荐）'), 20)}",
                                    f"#pick {name} {tid} {qi} {k}") for k, o in enumerate(q.get("options") or [], 1)]
                 hint = "点按钮就是选它。都不合适？直接打字回答：引用这张卡片回复，或点〔✍️ 回复它〕再打字。"
             else:
@@ -2382,13 +2518,14 @@ class Remote:
             hint = "点按钮就是选它；选「不允许」后它会停下来，你再告诉它改做什么。"
             text_opts = "\n".join(lines)
         extra = [_button("看屏幕", f"屏 {name}")]
-        if self.state.get("current") != name:
+        if self.state.get("current") != name and not built:   # Claude Code 自己的框打字答不了，不给〔回复它〕
             extra.insert(0, _button("✍️ 回复它", f"对话 {name}"))
         head = "\n".join(x for x in (note, who) if x)
         body = "\n\n".join(x for x in (context, text_opts) if x)
         els = ([_md(head)] if head else []) + [el for chunk in rich(body) for el in chunk]
-        els += [{"tag": "hr"}, _md(f"<font color='grey'>{hint}</font>")]
-        els += [{"tag": "action", "actions": buttons[i:i + 4]} for i in range(0, len(buttons), 4)]
+        if hint:
+            els += [{"tag": "hr"}, _md(f"<font color='grey'>{hint}</font>")]
+        els += [{"tag": "action", "layout": "bisected", "actions": buttons[i:i + 4]} for i in range(0, len(buttons), 4)]   # 两个一行，一样宽
         els.append({"tag": "action", "actions": extra})
         card = Card(_card(title, color, els), f"{title}\n{body}")
         card.ask_id = tid
@@ -2413,8 +2550,11 @@ class Remote:
             if q.get("question", "")[:12] not in "\n".join(rows):
                 return alert(f"❓【{name}】屏幕上现在不是这道题", "没有按键。点〔看屏幕〕看看它现在停在哪。", "yellow",
                              [_button("看屏幕", f"屏 {name}")])
-            picked = f"选了「{q['options'][int(n) - 1]['label']}」"
+            built = builtin_question(q) if len(qs) == 1 else None
+            picked = f"选了「{built['options'][int(n) - 1][0] if built else q['options'][int(n) - 1]['label']}」"
             send_keys(s, [n])
+            if built and built["options"][int(n) - 1][2] == "stay":
+                return self.stayed_card(name, s, built["model"])   # 它不会接着干：不显示「准备开始」，直接说这次没答
             time.sleep(0.8)
             if qi + 1 < len(qs):
                 card = self.ask_card(name, s, qi + 1, pt=pt, note=f"✅ 第 {qi + 1} 题{picked}")   # 下一题，原地换
@@ -3207,7 +3347,7 @@ class Remote:
                         once(f"held:{sid}:{e['statusAt']}", self.held_card(name, e, held, reg), "peer")
                     continue
                 if e.get("waiting"):                            # 停在选择题 / 权限框上：发「在问你」，不发「停下来了」
-                    if (remote and name in load_json(PENDING, {})) or f"idle:{episode}" in sent:
+                    if (remote and (name in load_json(PENDING, {}) or now() - pending < CARD_GRACE)) or f"idle:{episode}" in sent:
                         continue                                # 飞书那张“思考中”卡片会自己换成问题
                     pt = pending_tool(sid)
                     if not pt and idle_for < 10:
@@ -3223,8 +3363,8 @@ class Remote:
                     once(f"limit:{episode}", alert(f"⛔【{name}】额度用完了", self.who(name, e) + "\n" + first_paragraph(screen(e, 8), SUMMARY_CHARS), "red",
                                                     [_button("看屏幕", f"屏 {name}")]), "limit")
                 elif remote:
-                    if name in load_json(PENDING, {}):
-                        continue                                    # 飞书那张“思考中”卡片会自己换成回复
+                    if name in load_json(PENDING, {}) or now() - pending < CARD_GRACE:
+                        continue                                    # 飞书那张“思考中”卡片会自己换成回复（刚点的按钮：卡片还在登记）
                     self.state["remote_pending"].pop(name, None)
                     if self.state.get("current") == name:
                         self.state["current_at"] = now()            # 它回复了，也算一次活动

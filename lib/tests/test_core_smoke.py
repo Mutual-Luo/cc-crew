@@ -139,4 +139,59 @@ check("攒下的点了再发，同一个员工合成一张", "攒下的 2 条" i
 r.state["seen_you"] = time.time()
 check("你刚动过：不算夜里", not r.quiet_now())
 
+# 6. Claude Code 自己弹的英文框（安全检查拦下回答）：翻成中文；选「不换」原地说清楚，不出「准备开始」；退回输入框的话下次发之前先清掉
+FLAGGED = {"question": "Opus 5.5's safeguards flagged this session. You may be seeing this for the first time: Opus 5.5 is more capable and "
+           "has stronger safeguards as a result, which can sometimes flag non-cybersecurity work. We're improving these safeguards to "
+           "reduce the amount of incorrectly flagged messages. Switch to Opus 4.8 and keep going whenever this happens? You can change "
+           "this later in /config.", "header": "Model switch", "multiSelect": False,
+           "options": [{"label": "Switch automatically", "description": "Continue on Opus 4.8 now, and switch without asking from now on"},
+                       {"label": "Stay on Opus 5.5", "description": "Stop here without switching, and ask me each time a message is flagged"}]}
+built = crcore.builtin_question(FLAGGED)
+check("认出安全检查的框，翻成中文", built and built["model"] == "Opus 5.5" and [o[2] for o in built["options"]] == ["switch", "stay"]
+      and "Opus 4.8" in built["options"][0][0] and "网络攻击" in built["intro"], built)
+check("普通的选择题不当成它", crcore.builtin_question({"question": "用哪个方案？", "options": [{"label": "A"}]}) is None)
+W, ASKED = 100, "帮我看看 Claude-Red 这个项目是做什么的，会不会被拒绝执行"
+DIALOG = ["❯ " + ASKED, "  ⎿  Opus 5.5's safeguards stopped the response above", "─" * W, "☐ Model switch", "",
+          FLAGGED["question"][:90], FLAGGED["question"][90:], "", "❯ 1. Switch automatically",
+          "     Continue on Opus 4.8 now, and switch without asking from now on", "  2. Stay on Opus 5.5",
+          "     Stop here without switching, and ask me each time a message is flagged", "", "Enter to select · ↑/↓ to navigate · Esc to cancel"]
+BOX = ["上一轮的回复", "─" * W, "❯ " + ASKED[:12], "  " + ASKED[12:], "─" * W, "  Opus 5.5 · xhigh"]
+EMPTY = ["上一轮的回复", "─" * W, "❯", "─" * W, "  Opus 5.5 · xhigh"]
+screen_now, pressed = [DIALOG], []
+saved = crcore.pane_rows, crcore.send_keys, crcore.send_text, crcore.crterm.key, crcore.last_human_text, crcore.time.sleep
+def fake_key(s, k):
+    pressed.append(k)
+    if k == "C-c" and screen_now[0] is BOX:
+        screen_now[0] = EMPTY
+crcore.pane_rows = lambda s: list(screen_now[0])
+crcore.send_keys = lambda s, keys: (pressed.extend(keys), screen_now.__setitem__(0, BOX))
+crcore.send_text = lambda s, text, files=(): pressed.append("TEXT:" + text)
+crcore.crterm.key, crcore.last_human_text, crcore.time.sleep = fake_key, lambda sid: ASKED, lambda x: None
+sid = "00000000-0000-0000-0000-000000000009"
+os.makedirs(crcore.ASKS, exist_ok=True)
+with open(os.path.join(crcore.ASKS, sid + ".json"), "w", encoding="utf-8") as f:
+    json.dump({"session_id": sid, "tool_name": "AskUserQuestion", "tool_input": {"questions": [FLAGGED]}, "tool_use_id": None, "t": time.time()}, f)
+r = crcore.Remote()
+r.save = lambda: None
+s9 = {"sessionId": sid, "waiting": True, "status": "waiting", "statusAt": time.time() - 3, "cwd": FILES_ROOT, "pid": 1}
+ask = r.ask_card("exp", s9)
+text = json.dumps(ask.card, ensure_ascii=False)
+check("拦下的框：中文、不贴英文原文和你自己那段话", "安全检查" in ask.card["header"]["title"]["content"] and "safeguards" not in text
+      and "它前面说的" not in text and "换 Opus 4.8 接着答" in text and "对话 exp" not in text, text)
+r.state["remote_pending"].pop("exp", None)
+out = r.pick("exp", s9, ask.ask_id, "0", "2")
+check("选「不换」：按 2，原地说这次没答，不出「准备开始」", pressed == ["2"] and out.in_place and "没答" in out.text
+      and "exp" not in r.state["remote_pending"] and "#box exp send" in json.dumps(out.card, ensure_ascii=False), (pressed, out.text))
+s9.update(waiting=False, status="idle")
+reg = {"exp": {"pid": 1}}
+r.resolve = lambda target, reg, want_alive=True: ("exp", s9, None)
+r.live_card = lambda name, s, since: crcore.Card({}, "live")
+r.held_files = lambda: None
+r.deliver("exp", "换个问法：Claude-Red 是什么", reg)
+check("输入框里退回的上一句先清掉，再发你这句", pressed == ["2", "C-c", "TEXT:换个问法：Claude-Red 是什么"], pressed)
+screen_now[0], pressed[:] = ["─" * W, "❯ 我在电脑上打了一半", "─" * W], []
+r.deliver("exp", "新的一句", reg)
+check("你在电脑上打了一半的字不动", pressed == ["TEXT:新的一句"], pressed)
+crcore.pane_rows, crcore.send_keys, crcore.send_text, crcore.crterm.key, crcore.last_human_text, crcore.time.sleep = saved
+
 print(f"\n全部通过：{len(passed)} 项")
