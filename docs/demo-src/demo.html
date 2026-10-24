@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>cc-crew demo</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --line: #262b36; --fg: #e6e8ee; --dim: #8a93a6;
+    --accent: #d97757; --chat: #f3f4f6; --bubble: #3370ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 1280px; height: 720px; overflow: hidden; background: var(--bg); }
+  body { font-family: "Noto Sans SC", "Noto Color Emoji", sans-serif; color: var(--fg); position: relative; }
+  .mono { font-family: "JetBrains Mono", "Noto Sans SC", "Noto Color Emoji", monospace; }
+
+  /* 手机 */
+  #phone { position: absolute; left: 48px; top: 18px; width: 372px; height: 684px; border-radius: 40px;
+           background: #000; padding: 12px; box-shadow: 0 0 0 2px #2b303b, 0 20px 60px rgba(0,0,0,.5); }
+  #screen { width: 100%; height: 100%; border-radius: 30px; overflow: hidden; background: var(--chat); position: relative; }
+  #bar { height: 74px; background: #fff; border-bottom: 1px solid #e5e6eb; padding: 30px 16px 0; color: #1f2329; }
+  #bar b { font-size: 15px; } #bar span { font-size: 11px; color: #8f959e; margin-left: 6px; }
+  #pin { position: absolute; top: 76px; left: 8px; right: 8px; background: #fff; border-radius: 10px; padding: 7px 10px;
+         font-size: 12px; color: #1f2329; box-shadow: 0 2px 8px rgba(0,0,0,.08); z-index: 3; }
+  #pin small { color: #8f959e; }
+  #feed { position: absolute; top: 118px; bottom: 54px; left: 0; right: 0; overflow: hidden; }
+  #inner { position: absolute; left: 0; right: 0; padding: 0 10px 10px; }
+  #input { position: absolute; bottom: 0; left: 0; right: 0; height: 54px; background: #fff; border-top: 1px solid #e5e6eb;
+           padding: 9px 12px; }
+  #input div { height: 36px; border-radius: 18px; background: #f2f3f5; padding: 0 14px; line-height: 36px; font-size: 13px; color: #1f2329; overflow: hidden; white-space: nowrap; }
+  #input div.ph { color: #a0a6b0; }
+  .row { display: flex; margin-top: 12px; }
+  .row.me { justify-content: flex-end; }
+  .ava { width: 30px; height: 30px; border-radius: 50%; flex: none; display: grid; place-items: center; font-size: 15px; margin-right: 7px;
+         background: linear-gradient(135deg, #a78bfa, #7c3aed); }
+  .who { font-size: 10.5px; color: #8f959e; margin-bottom: 3px; }
+  .who i { font-style: normal; background: #fff3d6; color: #a46a00; border-radius: 3px; padding: 0 3px; margin-left: 3px; font-size: 9.5px; }
+  .me .bub { background: var(--bubble); color: #fff; border-radius: 12px 2px 12px 12px; padding: 8px 11px; font-size: 13px; max-width: 250px; line-height: 1.5; }
+  .card { width: 296px; background: #fff; border-radius: 10px; overflow: hidden; border: 1px solid #e5e6eb; color: #1f2329; }
+  .card .hd { padding: 9px 12px; font-weight: 700; font-size: 13.5px; }
+  .card .bd { padding: 8px 12px 10px; font-size: 12px; line-height: 1.6; }
+  .card .bd p { margin: 2px 0; white-space: pre-wrap; }
+  .card .grey { color: #8f959e; }
+  .card hr { border: 0; border-top: 1px solid #eef0f2; margin: 7px 0; }
+  .card .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+  .card .acts.bi .btn { flex: 1 1 calc(50% - 6px); }
+  .btn { border: 1px solid #d0d3d6; border-radius: 6px; padding: 4px 8px; font-size: 11.5px; text-align: center; background: #fff; position: relative; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .btn.primary { border-color: #3370ff; color: #3370ff; }
+  .btn.danger { border-color: #f54a45; color: #f54a45; }
+  .btn.hit { background: #e1eaff; }
+  .card .note { font-size: 10.5px; color: #8f959e; margin-top: 7px; }
+  .t-wathet .hd { background: #e1f3fb; color: #0b6aa8; } .t-green .hd { background: #e3f6e5; color: #1f7a33; }
+  .t-orange .hd { background: #fdecdc; color: #b55a00; } .t-carmine .hd { background: #fde2e6; color: #b4142c; }
+  .t-grey .hd { background: #eef0f2; color: #4e5969; } .t-blue .hd { background: #e1eaff; color: #1d4fd8; }
+  .t-purple .hd { background: #efe6fd; color: #6b2fb3; } .t-yellow .hd { background: #fdf5d6; color: #8a6d00; }
+  #tap { position: absolute; width: 34px; height: 34px; border-radius: 50%; background: rgba(51,112,255,.35);
+         border: 2px solid rgba(51,112,255,.8); pointer-events: none; opacity: 0; z-index: 9; transform: translate(-50%,-50%); }
+
+  /* 右边：说明 + 终端 */
+  #cap { position: absolute; left: 470px; top: 26px; width: 770px; height: 108px; }
+  #cap .zh { font-size: 30px; font-weight: 700; line-height: 1.25; }
+  #cap .en { font-size: 15px; color: var(--dim); margin-top: 8px; }
+  #cap .zh em { font-style: normal; color: var(--accent); }
+  #grid { position: absolute; left: 470px; top: 150px; width: 770px; height: 548px; display: grid;
+          grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 10px; }
+  .pane { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+  .pane.flash { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(217,119,87,.35); }
+  .pane .tt { font-size: 12px; padding: 6px 10px; background: #1d212a; color: var(--dim); display: flex; justify-content: space-between; }
+  .pane .tt b { color: var(--fg); font-weight: 600; }
+  .pane .tx { flex: 1; padding: 8px 10px; font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; color: #cfd3dc; overflow: hidden;
+              display: flex; flex-direction: column; justify-content: flex-end; }
+  .tx .o { color: var(--accent); } .tx .g { color: #7ee2a8; } .tx .d { color: #6b7385; } .tx .y { color: #f2c94c; } .tx .b { color: #8ab4ff; }
+  .tx .box { border-top: 1px solid #2c3240; border-bottom: 1px solid #2c3240; margin-top: 5px; padding: 2px 0; }
+  #end { position: absolute; inset: 0; background: radial-gradient(circle at 50% 40%, #1d2230, #0b0d12); display: none; z-index: 20;
+         flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+  #end h1 { font-size: 64px; letter-spacing: 1px; } #end h1 span { color: var(--accent); }
+  #end p { font-size: 22px; color: var(--dim); margin-top: 10px; }
+  #end code { display: inline-block; margin-top: 28px; font-size: 20px; background: #1a1e27; border: 1px solid #2b3140; padding: 12px 22px; border-radius: 10px; color: var(--fg); }
+  #end .url { margin-top: 18px; font-size: 20px; color: #8ab4ff; }
+</style>
+</head>
+<body>
+<div id="phone"><div id="screen">
+  <div id="bar"><b>我的 Claude 员工们</b><span>1 名成员 · 1 个机器人</span></div>
+  <div id="pin">📌 <b>📋 员工看板</b> <small>· 置顶</small></div>
+  <div id="feed"><div id="inner"></div></div>
+  <div id="input"><div class="ph" id="typing">发消息给 员工群</div></div>
+</div><div id="tap"></div></div>
+
+<div id="cap"><div class="zh" id="capzh"></div><div class="en" id="capen"></div></div>
+<div id="grid"></div>
+<div id="end"><h1>cc-<span>crew</span></h1><p>在飞书里当老板，管你电脑上的一群 Claude Code</p>
+  <p style="font-size:17px">Be the boss of your Claude Code crew — from your phone.</p>
+  <code class="mono">git clone …/cc-crew &amp;&amp; python install.py</code><div class="url mono">github.com/Mutual-Luo/cc-crew</div></div>
+
+<script>
+// ---------------------------------------------------------------- 卡片：跟 cc-crew 发到飞书的卡片同一个结构（header + elements）
+const md = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/&lt;font color='grey'>(.*?)&lt;\/font>/gs, "<span class='grey'>$1</span>")
+                 .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+function cardHTML(c) {
+  let h = `<div class="card t-${c.color}"><div class="hd">${md(c.title)}</div><div class="bd">`;
+  for (const e of c.els) {
+    if (e.md !== undefined) h += `<p>${md(e.md)}</p>`;
+    else if (e.hr) h += "<hr>";
+    else if (e.acts) h += `<div class="acts ${e.bi ? "bi" : ""}">` + e.acts.map(([t, k, id]) =>
+      `<div class="btn ${k || ""}" ${id ? `id="${id}"` : ""}>${md(t)}</div>`).join("") + "</div>";
+    else if (e.note) h += `<div class="note">${md(e.note)}</div>`;
+  }
+  return h + "</div></div>";
+}
+let seq = 0;
+function botCard(c) {
+  const id = "m" + (++seq);
+  const row = document.createElement("div");
+  row.className = "row"; row.id = id;
+  row.innerHTML = `<div class="ava">⭐</div><div><div class="who">cc-crew<i>机器人</i></div>${cardHTML(c)}</div>`;
+  inner.appendChild(row); follow(); return id;
+}
+function setCard(id, c) { document.querySelector(`#${id} .card`).outerHTML = cardHTML(c); follow(); }
+function me(text) {
+  const row = document.createElement("div");
+  row.className = "row me"; row.innerHTML = `<div class="bub">${md(text)}</div>`;
+  inner.appendChild(row); follow();
+}
+
+// 聊天区自动滚到底（平滑）
+let scrollY = 0, scrollTo = 0;
+function follow() { scrollTo = Math.min(0, feed.clientHeight - inner.scrollHeight); }
+function tickScroll() { scrollY += (scrollTo - scrollY) * 0.25; inner.style.top = scrollY + "px"; requestAnimationFrame(tickScroll); }
+
+// 点一下：蓝色圆圈 + 按钮变色
+function tap(btnId) {
+  const b = document.getElementById(btnId); if (!b) return;
+  const r = b.getBoundingClientRect(), p = phone.getBoundingClientRect();
+  tapEl.style.left = (r.left - p.left + r.width / 2) + "px"; tapEl.style.top = (r.top - p.top + r.height / 2) + "px";
+  tapEl.style.opacity = 1; b.classList.add("hit");
+  setTimeout(() => { tapEl.style.opacity = 0; }, 450);
+}
+// 打字：一个字一个字出现，然后「发出」
+function type(text, ms, done) {
+  typing.className = ""; let i = 0;
+  const step = () => { i++; typing.textContent = text.slice(0, i); if (i < text.length) setTimeout(step, ms); else setTimeout(() => {
+    typing.className = "ph"; typing.textContent = "发消息给 员工群"; me(text); done && done(); }, 350); };
+  step();
+}
+function caption(zh, en) { capzh.innerHTML = zh; capen.textContent = en; }
+
+// ---------------------------------------------------------------- 右边四个终端（tmux 里真的 Claude Code）
+const panes = {};
+function pane(key, title, sub) {
+  const el = document.createElement("div"); el.className = "pane";
+  el.innerHTML = `<div class="tt"><b>${title}</b><span>${sub}</span></div><div class="tx mono"></div>`;
+  grid.appendChild(el); panes[key] = el; return el;
+}
+function term(key, lines) { panes[key].querySelector(".tx").innerHTML = "<div>" + lines.join("\n") + "</div>"; }
+function flash(key) { const p = panes[key]; p.classList.add("flash"); setTimeout(() => p.classList.remove("flash"), 900); }
+const box = (s = "") => `<div class="box">❯ ${s}</div>`;
+
+// ---------------------------------------------------------------- 时间线
+const T = []; const at = (s, f) => T.push([s * 1000, f]);
+const board = (lines, extra = []) => ({ title: "📋 员工看板", color: "wathet", els: [{ md: lines.join("\n") }, ...extra,
+  { note: "点名字＝看详情并开始跟它说话 · 5 小时额度 12% · 周额度 31%" }] });
+const B1 = ["🟢 干活中　1号 **exp-baseline** · 跑基线", "🟢 干活中　2号 **paper** · 改论文第 4 节",
+            "🙋 等你拍板　3号 **refactor**", "⏸ 空闲　**助手**（秘书）"];
+
+at(0, () => {
+  pane("p1", "1号 exp-baseline", "~/proj/exp");
+  pane("p2", "2号 paper", "~/proj/paper");
+  pane("p3", "3号 refactor", "~/proj/app");
+  pane("p4", "助手（秘书）", "~");
+  term("p1", ["<span class='o'>●</span> Bash(python train.py --cfg base.yaml)", "  <span class='d'>⎿ epoch 3/20 · loss 0.412</span>", "<span class='o'>✻</span> Running… <span class='d'>(4m 12s)</span>", box()]);
+  term("p2", ["<span class='o'>●</span> Read(sections/4-method.tex)", "<span class='o'>●</span> Update(sections/4-method.tex)", "  <span class='d'>⎿ 改了 6 行</span>", "<span class='o'>✻</span> Thinking… <span class='d'>(38s)</span>", box()]);
+  term("p3", ["<span class='o'>●</span> 两种做法：", "  A. 先拆 service 层，再改接口", "  B. 先补测试，再一点点拆", "  C. 直接重写这个模块", "  你选哪个？", box()]);
+  term("p4", ["<span class='d'>（空闲，等你吩咐）</span>", box()]);
+  caption("4 个 Claude Code 在服务器上干活，<em>我在地铁上</em>", "4 Claude Code sessions working on my server. I'm on the subway.");
+  window.bid = botCard(board(B1));
+});
+at(3.2, () => {
+  caption("要我拍板的，<em>做成按钮</em>", "Decisions become buttons.");
+  window.ask = botCard({ title: "🙋 3号【refactor】：老板，需要你拍板", color: "carmine", els: [
+    { md: "<font color='grey'>📌 重构支付模块 · ~/proj/app</font>" },
+    { md: "两种做法：\n**A.** 先拆 service 层，再改接口\n**B.** 先补测试，再一点点拆\n**C.** 直接重写这个模块\n你选哪个？" },
+    { acts: [["A", ""], ["B", "", "bB"], ["C", ""], ["✍️ 回复它", "primary"]] }] });
+});
+at(5.4, () => tap("bB"));
+at(5.9, () => {
+  setCard(ask, { title: "⏳ 3号【refactor】正在执行 · 3秒", color: "wathet", els: [
+    { md: "<font color='grey'>你 → 【refactor】：B</font>" }, { hr: 1 },
+    { md: "📖 读取 payment/service.py\n**⚙️ 运行命令** pytest tests/payment -q ⏳" }, { hr: 1 },
+    { md: "⏳ **正在执行…**　已 3秒" }, { acts: [["⏹ 停止", "danger"], ["🧠 思考：高", ""], ["看屏幕", ""]] }] });
+  term("p3", ["<span class='b'>❯ B</span>", "<span class='o'>●</span> 好，先补测试。", "<span class='o'>●</span> Read(payment/service.py)", "<span class='o'>●</span> Bash(pytest tests/payment -q)", "<span class='o'>✻</span> Running… <span class='d'>(3s)</span>", box()]);
+  flash("p3");
+  setCard(bid, board(["🟢 干活中　1号 **exp-baseline** · 跑基线", "🟢 干活中　2号 **paper** · 改论文第 4 节",
+                      "🟢 干活中　3号 **refactor** · 先补测试", "⏸ 空闲　**助手**（秘书）"]));
+});
+at(8.6, () => {
+  caption("要权限的，<em>点一下就允许</em>", "Permission prompts → Allow / Deny.");
+  term("p1", ["<span class='o'>●</span> Bash(python train.py --cfg base.yaml)", "  <span class='d'>⎿ 20/20 · acc 81.3</span>", "<span class='y'>Bash command</span>", "  pip install -U wandb", "<span class='y'>Do you want to proceed?</span>", "<span class='b'>❯ 1. Yes</span>", "  2. Yes, and don't ask again", "  3. No"]);
+  window.perm = botCard({ title: "🔐 1号【exp-baseline】要你批准", color: "yellow", els: [
+    { md: "<font color='grey'>📌 跑基线 · ~/proj/exp</font>" },
+    { md: "它想：**⚙️ 运行命令**\n`pip install -U wandb`" },
+    { acts: [["允许这一次", "primary", "bOK"], ["允许，以后不再问", ""], ["不允许", "danger"]], bi: 1 }] });
+});
+at(10.6, () => tap("bOK"));
+at(11.1, () => {
+  setCard(perm, { title: "⏳ 1号【exp-baseline】正在执行 · 1秒", color: "wathet", els: [
+    { md: "<font color='grey'>你 → 【exp-baseline】：选了「允许这一次」</font>" }, { hr: 1 },
+    { md: "**⚙️ 运行命令** pip install -U wandb ⏳" }, { acts: [["⏹ 停止", "danger"], ["看屏幕", ""]] }] });
+  term("p1", ["<span class='o'>●</span> Bash(pip install -U wandb)", "  <span class='d'>⎿ Successfully installed wandb-0.19.1</span>", "<span class='o'>●</span> 把结果同步到 wandb…", "<span class='o'>✻</span> Running… <span class='d'>(2s)</span>", box()]);
+  flash("p1");
+});
+at(13.2, () => {
+  caption("随口一句，<em>秘书去招人</em>", "Tell the secretary. It hires a new session.");
+  type("招个人把 repo-x 的测试跑通", 70);
+});
+at(15.6, () => {
+  term("p4", ["<span class='b'>❯ 招个人把 repo-x 的测试跑通</span>", "<span class='o'>●</span> Bash(cr 新建 tester ~/proj/repo-x)", "  <span class='d'>⎿ 已在 tmux 里开好 5号 tester</span>", "<span class='o'>●</span> 已派活：跑通 repo-x 的测试", box()]);
+  flash("p4");
+  botCard({ title: "💬【助手】", color: "green", els: [{ md: "<font color='grey'>✓ 用时 9秒 · 做了 2 步</font>" },
+    { md: "招好了：**5号 tester**，在 ~/proj/repo-x。\n已经让它去跑测试、修到全部通过，修完会给你汇报。" },
+    { acts: [["看全文", ""], ["新对话", ""]] }] });
+});
+at(17.3, () => {
+  caption("新员工入职，<em>实时看它干到哪</em>", "Live progress: every step, a ticking timer.");
+  panes.p4.querySelector(".tt b").textContent = "5号 tester";
+  panes.p4.querySelector(".tt span").textContent = "~/proj/repo-x";
+  term("p4", ["<span class='o'>●</span> Bash(pytest -q)", "  <span class='d'>⎿ 3 failed, 39 passed</span>", "<span class='o'>✻</span> Thinking… <span class='d'>(6s)</span>", box()]);
+  flash("p4");
+  window.live = botCard(liveCard(6, ["📖 读取 tests/test_api.py", "**⚙️ 运行命令** pytest -q ⏳"]));
+});
+function liveCard(sec, steps) {
+  return { title: `⏳ 5号【tester】正在执行 · ${sec}秒`, color: "wathet", els: [
+    { md: "<font color='grey'>📌 跑通 repo-x 的测试 · ~/proj/repo-x</font>" }, { hr: 1 }, { md: steps.join("\n") }, { hr: 1 },
+    { md: `⏳ **正在执行…**　已 ${sec}秒` }, { acts: [["⏹ 停止", "danger"], ["🧠 思考：高", ""], ["看屏幕", ""]] }] };
+}
+at(18.6, () => setCard(live, liveCard(14, ["📖 读取 tests/test_api.py", "⚙️ 运行命令 pytest -q", "🧠 想了想：时区没处理，3 个失败都是这个", "**✏️ 修改** api/time.py ⏳"])));
+at(19.9, () => { setCard(live, liveCard(27, ["⚙️ 运行命令 pytest -q", "🧠 想了想：时区没处理，3 个失败都是这个", "✏️ 修改 api/time.py", "**⚙️ 运行命令** pytest -q ⏳"]));
+  term("p4", ["<span class='o'>●</span> Update(api/time.py)", "  <span class='d'>⎿ 改了 4 行</span>", "<span class='o'>●</span> Bash(pytest -q)", "  <span class='g'>⎿ 42 passed</span>", box()]); });
+at(21.4, () => {
+  setCard(live, { title: "📝 5号【tester】：汇报", color: "orange", els: [{ md: "<font color='grey'>✓ 用时 41秒 · 想了 2 次 · 做了 5 步</font>" },
+    { md: "**测试全部通过（42 passed）。**\n3 个失败都是同一个原因：时间没带时区。改了 api/time.py 4 行，没动别的文件。" },
+    { acts: [["✍️ 回复它", "primary"], ["看全文", ""], ["🔎 看过程", ""]] }] });
+});
+at(23.6, () => {
+  caption("多选题？<em>勾上，提交</em>", "Multi-select questions → checkboxes.");
+  term("p2", ["<span class='o'>●</span> 审稿人提了 4 条，你同意改哪几条？", "<span class='b'>❯ 1. [ ] 补消融实验</span>", "  2. [ ] 换 Fig.3 的配色", "  3. [ ] 精简 4.2 节", "  4. [ ] 加上限讨论", "  Submit"]);
+  window.multi = botCard(multiCard([]));
+});
+function multiCard(on) {
+  const o = ["补消融实验", "换 Fig.3 的配色", "精简 4.2 节", "加上限讨论"];
+  return { title: "❓ 2号【paper】在问你", color: "orange", els: [{ md: "**审稿人提了 4 条，你同意改哪几条？**（多选）" },
+    { acts: o.map((t, i) => [`${on.includes(i + 1) ? "☑" : "☐"} ${i + 1}. ${t}`, on.includes(i + 1) ? "primary" : "", "o" + (i + 1)])
+      .concat([[on.length ? `✅ 提交（选了 ${on.length} 项）` : "一个都不选，提交", on.length ? "primary" : "", "sub"]]), bi: 1 }] };
+}
+at(25.0, () => tap("o1"));
+at(25.4, () => setCard(multi, multiCard([1])));
+at(26.0, () => tap("o3"));
+at(26.4, () => setCard(multi, multiCard([1, 3])));
+at(27.2, () => tap("sub"));
+at(27.7, () => {
+  setCard(multi, { title: "⏳ 2号【paper】正在思考 · 1秒", color: "wathet", els: [{ md: "<font color='grey'>你 → 【paper】：我选：1. 补消融实验；3. 精简 4.2 节。没选的不做。</font>" },
+    { hr: 1 }, { md: "⏳ **正在思考…**　已 1秒" }, { acts: [["⏹ 停止", "danger"], ["看屏幕", ""]] }] });
+  term("p2", ["<span class='b'>❯ 我选：1. 补消融实验；3. 精简 4.2 节。没选的不做。</span>", "<span class='o'>●</span> 好，先补消融，再精简 4.2。", "<span class='o'>✻</span> Thinking… <span class='d'>(1s)</span>", box()]);
+  flash("p2");
+});
+at(29.6, () => {
+  caption("下班：<em>对话留着，明天接着干</em>", "Clock out. The conversation is kept. Clock back in tomorrow.");
+  type("@1 下班", 90);
+});
+at(31.0, () => {
+  term("p1", ["<span class='b'>❯ /exit</span>", "<span class='d'>Resume this session with: claude --resume …</span>", "", "<span class='d'>$</span>"]);
+  panes.p1.querySelector(".tt b").textContent = "1号 exp-baseline（下班）";
+  flash("p1");
+  botCard({ title: "🌙 1号【exp-baseline】下班了", color: "grey", els: [{ md: "对话记录留着。发「上班 1」就在原目录接着原来的对话干。" }] });
+});
+at(33.0, () => {
+  caption("夜里不吵：<em>只推要你拍板的</em>，其余攒着", "Quiet hours: only decisions wake you up.");
+  setCard(bid, board(["🌙 夜间免打扰（1:00–9:00）：只推要你拍板的，其余攒了 6 条",
+                      "🟢 干活中　2号 **paper** · 补消融实验", "🟢 干活中　3号 **refactor** · 先补测试",
+                      "🟢 干活中　5号 **tester** · 修 CI", "🌙 下班了：exp-baseline"], [{ acts: [["🌙 看攒下的 6 条", ""]] }]));
+  scrollTo = -(document.getElementById(bid).offsetTop - 6);
+});
+at(35.6, () => { document.getElementById("end").style.display = "flex"; });
+
+// 跑起来：每一帧由外面推进时钟（录屏用），或者直接看（打开网页实时播放）
+const inner = document.getElementById("inner"), feed = document.getElementById("feed"), phone = document.getElementById("phone");
+const tapEl = document.getElementById("tap"), typing = document.getElementById("typing"), grid = document.getElementById("grid");
+const capzh = document.getElementById("capzh"), capen = document.getElementById("capen");
+requestAnimationFrame(tickScroll);
+for (const [ms, f] of T) setTimeout(f, ms);
+window.DURATION = 38.5;
+</script>
+</body>
+</html>

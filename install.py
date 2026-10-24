@@ -31,7 +31,12 @@ def say(msg):
     print(msg, flush=True)
 
 
+YES = "--yes" in sys.argv                                # 不问问题：全用 config.env 里填好的和默认值（给 Claude Code 代装用）
+
+
 def ask(prompt, default="", secret=False):
+    if YES:
+        return default
     shown = f"{prompt}" + (f"（回车用 {default}）" if default and not secret else "") + "："
     val = (getpass.getpass(shown) if secret else input(shown)).strip()
     return val or default
@@ -93,6 +98,8 @@ def step_config():
     env["CLAUDE_MONITOR_FILES_ROOT"] = ask("员工只能在哪个目录下干活（也只把这下面的文件发到手机）",
                                            env.get("CLAUDE_MONITOR_FILES_ROOT", os.path.expanduser("~")))
     env["CLAUDE_MONITOR_PROXY"] = ask("claude 必须经过的代理「主机:端口」（没有就直接回车）", env.get("CLAUDE_MONITOR_PROXY", ""))
+    if not env["FEISHU_APP_ID"] or not env["FEISHU_APP_SECRET"]:
+        raise SystemExit(f"还没有飞书的 App ID / App Secret：在 {CONFIG} 里写上 FEISHU_APP_ID=… 和 FEISHU_APP_SECRET=…，再装一次")
     if os.environ.get("CLAUDE_CONFIG_DIR") and not env.get("CLAUDE_CONFIG_DIR"):
         env["CLAUDE_CONFIG_DIR"] = os.environ["CLAUDE_CONFIG_DIR"]
     write_config(env)
