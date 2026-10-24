@@ -209,4 +209,27 @@ out = r.pick("exp", s9, ask.ask_id, "0", "1")
 check("点〔换 Opus 4.8〕：按 1，卡片变成实时进度", pressed == ["1"] and out.pending_for == "exp" and r.state["remote_pending"].get("exp"), pressed)
 crcore.pane_rows, crcore.send_keys, crcore.send_text, crcore.crterm.key, crcore.last_human_text, crcore.time.sleep = saved
 
+# 7. /compact：回一张会动的卡片（计时），做完原地换成「上下文 37% → 9%」，不另发
+cst = {"status": "busy", "ctx": 37}
+saved7 = crcore.pane_rows, crcore.send_text, crcore.session_status, crcore.slash_catalog, crcore.discover, crcore.time.sleep
+crcore.pane_rows = lambda s: ["❯ /compact", "✻ Compacting conversation… (2s)", "─" * 90, "❯", "─" * 90]
+crcore.send_text, crcore.time.sleep = (lambda s, t, files=(): None), (lambda x: None)
+crcore.session_status = lambda s: {"ctx": cst["ctx"], "effort": "medium", "model": "Opus 5.5"}
+crcore.slash_catalog = lambda s: [("/compact", "")]
+s7 = {"sessionId": "y", "status": "idle", "statusAt": time.time(), "cwd": FILES_ROOT, "pid": 1}
+crcore.discover = lambda: {"exp": dict(s7, status=cst["status"])}
+r = crcore.Remote()
+c = r.run_slash("exp", s7, "/compact")
+check("/compact：会动的进度卡片，交给实时刷新", c.pending_for == "exp" and "正在压缩上下文" in c.text, c.text)
+r.state["slash"]["exp"][0] -= 23
+r.save()
+[(_, c, final)] = r.live_updates(["exp"])
+check("跑着：计时在走", not final and "23秒" in c.card["header"]["title"]["content"], c.card["header"]["title"])
+cst.update(status="idle", ctx=9)
+r.state["slash"]["exp"][0] -= 30
+r.save()
+[(_, c, final)] = r.live_updates(["exp"])
+check("做完：原地换成上下文 37% → 9%", final and "37% → 9%" in c.text and "exp" not in r.state.get("slash", {}), c.text)
+crcore.pane_rows, crcore.send_text, crcore.session_status, crcore.slash_catalog, crcore.discover, crcore.time.sleep = saved7
+
 print(f"\n全部通过：{len(passed)} 项")

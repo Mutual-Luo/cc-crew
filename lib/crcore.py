@@ -2134,9 +2134,10 @@ class Remote:
         if screen_menu(rows):                           # 弹了菜单（/model、/resume…）：要遥控键盘
             return self.screen_card(name, s, note=f"➡️ 已把 {body} 发给【{name}】，用下面的按钮选：")
         label, desc = next(((lb.split(" ", 1)[-1], d) for c, lb, d in SLASH if c == word), (word, ""))
-        if running:
-            title, color = f"⏳【{name}】正在{label}…", "wathet"
-            text = (f"{desc}。\n" if desc else "") + (f"现在上下文 {before}%，" if before is not None else "") + "做完再发一张卡片告诉你。"
+        if running:                                     # 像回复一样：卡片自己动（计时、转圈），做完原地换成结果
+            card = self.slash_card(name, s, self.state["slash"][name])
+            card.pending_for = name
+            return card
         else:
             out = slash_output(rows, word)
             title, color = f"⌨️【{name}】{label}", "blue"
@@ -2943,6 +2944,29 @@ class Remote:
         els.append(_md("\n".join(self._step_lines(steps, 30))))
         return Card(_card(f"🔎【{name}】这一轮的过程", "grey", els), f"🔎【{name}】共 {len(steps)} 步")
 
+    def slash_card(self, name, s, note, done=False):
+        """/compact 这类要跑一会儿的命令：跑着的时候计时、转圈；做完写上下文从多少降到多少。note = [发出时间, 命令, 发之前的上下文%]。"""
+        word, before = note[1], (note[2] if len(note) > 2 else None)
+        label, desc = next(((lb.split(" ", 1)[-1], d) for c, lb, d in SLASH if c == word), (word, ""))
+        took = fmt_secs(now() - note[0])
+        who = self.who(name, s)
+        if done:
+            after = session_status(s).get("ctx")
+            ctx = f"上下文 **{before}% → {after}%**" if before is not None and after is not None else ctx_text(session_status(s))
+            if word == "/compact" and before is not None and after is not None and after >= before:   # 按了停止，或没压成
+                return alert(f"⏹【{name}】{label}没做完", "\n".join(x for x in (who, f"跑了 {took} 停下了，上下文还是 {after}%。") if x),
+                             "grey", [_button("看屏幕", f"屏 {name}")])
+            body = "\n".join(x for x in (who, f"<font color='grey'>✓ 用时 {took}</font>", ctx) if x)
+            return alert(f"✅【{name}】{label}做完了", body, "green", [_button("✍️ 接着说", f"对话 {name}") if not is_assistant(name)
+                                                                      else _button("看屏幕", f"屏 {name}")])
+        dots = "●○○ ○●○ ○○●".split()[int(now() / 3) % 3]
+        body = "\n".join(x for x in (who, f"<font color='grey'>{desc}</font>" if desc else "",
+                                      f"⏳ **正在{label}** {dots}　已 {took}" + (f"\n<font color='grey'>开始前上下文 {before}%</font>" if before is not None else "")) if x)
+        card = alert(f"⏳【{name}】正在{label} · {took}", body, "wathet",
+                     [_button("⏹ 停止", f"#stop {name}", "danger"), _button("看屏幕", f"屏 {name}")],
+                     footer=f"{talking_to(self.state, name)}\n自动刷新 {time.strftime('%H:%M:%S')}")
+        return card
+
     def live_updates(self, names):
         """给飞书守护进程用：这些“思考中”卡片现在该显示什么；做完的返回最终回复（final=True）。"""
         self.state = load_json(STATE, self.state)
@@ -2950,6 +2974,14 @@ class Remote:
         out = []
         for name in names:
             since, s = self.state["remote_pending"].get(name), live.get(name)
+            note = self.state.get("slash", {}).get(name)
+            if note and not since:                          # /compact 这类：跑着就刷新，停下来原地换成结果
+                if s and (s["status"] == "busy" or now() - note[0] < 5):
+                    out.append((name, self.slash_card(name, s, note), False))
+                    continue
+                self.state["slash"].pop(name, None)
+                out.append((name, self.slash_card(name, s, note, done=True) if s else None, True))
+                continue
             if not since:
                 out.append((name, None, True))              # 已经由别处处理过了
             elif not s:
@@ -3396,7 +3428,9 @@ class Remote:
             if e["status"] != "busy":
                 idle_for = now() - e["statusAt"]
                 note = self.state.get("slash", {}).get(name)
-                if note and note[0] <= e["statusAt"] + 1 and not is_quiet(name):     # 你发的 /compact 之类做完了
+                if note and (name in load_json(PENDING, {}) or now() - note[0] < CARD_GRACE):
+                    continue                                # 飞书那张会动的卡片自己会换成「做完了」
+                elif note and note[0] <= e["statusAt"] + 1 and not is_quiet(name):     # 你发的 /compact 之类做完了
                     self.state["slash"].pop(name)
                     after = session_status(e).get("ctx")
                     label = next((lb.split(" ", 1)[-1] for c, lb, _ in SLASH if c == note[1]), note[1])
