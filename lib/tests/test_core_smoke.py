@@ -192,6 +192,32 @@ check("输入框里退回的上一句先清掉，再发你这句", pressed == ["
 screen_now[0], pressed[:] = ["─" * W, "❯ 我在电脑上打了一半", "─" * W], []
 r.deliver("exp", "新的一句", reg)
 check("你在电脑上打了一半的字不动", pressed == ["TEXT:新的一句"], pressed)
+MULTI = {"question": "审稿人要这些实验，你同意做哪些？（可多选）", "header": "实验", "multiSelect": True,
+         "options": [{"label": "批量打分重新计时"}, {"label": "均匀刷新对照"}]}
+with open(os.path.join(crcore.ASKS, sid + ".json"), "w", encoding="utf-8") as f:
+    json.dump({"session_id": sid, "tool_name": "AskUserQuestion", "tool_input": {"questions": [MULTI]}, "tool_use_id": None, "t": time.time()}, f)
+screen_now[0], pressed[:] = ["─" * W, "←  ☐ 实验  ✔ Submit  →", MULTI["question"], "❯ 1. [ ] 批量打分重新计时", "2. [ ] 均匀刷新对照",
+                             "3. [ ] Type something", "Submit", "─" * W, "4. Chat about this",
+                             "Enter to select · ↑/↓ to navigate · Esc to cancel"], []
+s9.update(waiting="input needed", status="waiting", statusAt=time.time() - 30)
+r.deliver("exp", "是我们故事讲得有问题吗？还是太强调打分了", reg)
+check("多选题上打字：先 Esc 关掉题，再当普通消息发出去", pressed == ["esc", "TEXT:是我们故事讲得有问题吗？还是太强调打分了"], pressed)
+os.remove(os.path.join(crcore.ASKS, sid + ".json"))
+MSCREEN = ["─" * W, "←  ☐ 实验  ✔ Submit  →", MULTI["question"], "❯ 1. [ ] 批量打分重新计时", "2. [ ] 均匀刷新对照",
+           "3. [ ] Type something", "Submit", "─" * W, "4. Chat about this", "Enter to select · ↑/↓ to navigate · Esc to cancel"]
+with open(os.path.join(crcore.ASKS, sid + ".json"), "w", encoding="utf-8") as f:
+    json.dump({"session_id": sid, "tool_name": "AskUserQuestion", "tool_input": {"questions": [MULTI]}, "tool_use_id": None, "t": time.time()}, f)
+screen_now[0], pressed[:] = MSCREEN, []
+s9.update(statusAt=time.time() - 5)
+ask = r.ask_card("exp", s9)
+cmds = [b["value"]["cmd"] for e in ask.card["elements"] if e.get("tag") == "action" for b in e["actions"]]
+check("多选题卡片有按钮：每项一个勾选，外加提交", f"#mpick exp {ask.ask_id} 1" in cmds and f"#msubmit exp {ask.ask_id}" in cmds, cmds)
+out = r.button_cmd(["mpick", "exp", ask.ask_id, "2"], reg)
+labels = [b["text"]["content"] for e in out.card["elements"] if e.get("tag") == "action" for b in e["actions"]]
+check("点一下勾上，卡片原地刷新", out.in_place and "☑ 2. 均匀刷新对照" in labels and "✅ 提交（选了 1 项）" in labels and pressed == [], (labels, pressed))
+r.button_cmd(["msubmit", "exp", ask.ask_id], reg)
+check("提交：关掉题，把「我选：…」发给它", pressed == ["esc", "TEXT:我选：2. 均匀刷新对照。没选的不做。"], pressed)
+os.remove(os.path.join(crcore.ASKS, sid + ".json"))
 screen_now[0], pressed[:] = ["上一轮", "● Opus 5.5's safeguards stopped the response above · continuing once with that noted", "─" * W,
                              "Session paused", "Opus 5.5's safeguards flagged this session. You may be seeing this for the first time: "
                              "Opus 5.5 is more capable and has stronger safeguards as a result, which can sometimes flag",
@@ -199,7 +225,7 @@ screen_now[0], pressed[:] = ["上一轮", "● Opus 5.5's safeguards stopped the
                              "❯ 1. Switch to Opus 4.8", "2. Edit prompt and retry with Opus 5.5",
                              "✻ Waiting for API response · will retry in 2m 40s"], []
 s9.update(waiting="dialog open", status="waiting", statusAt=time.time() - 60)
-os.remove(os.path.join(crcore.ASKS, sid + ".json"))             # 这种框不走 hook，没有记录
+# 「Session paused」不走 hook，没有记录
 ask = r.ask_card("exp", s9)
 text = json.dumps(ask.card, ensure_ascii=False) if ask else ""
 check("「Session paused」也认出来，翻成中文", ask and "暂停" in ask.card["header"]["title"]["content"] and "Session paused" not in text

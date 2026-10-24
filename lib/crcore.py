@@ -2454,6 +2454,8 @@ class Remote:
             return self.steps_card(name, s, since)
         if op == "ask":
             return self.ask_card(name, s) or f"【{name}】现在没有在等你回答或批准。"
+        if op in ("mpick", "msubmit") and len(words) > 2:
+            return self.multi_pick(name, s, words[2], words[3] if len(words) > 3 else "0", reg, submit=op == "msubmit")
         if op == "pick" and len(words) > 4:
             return self.pick(name, s, words[2], words[3], words[4])
         if op == "key" and len(words) > 3:
@@ -2551,8 +2553,17 @@ class Remote:
                 buttons = [_button(f"{k}. {one_line(o.get('label', '').replace('(Recommended)', '（推荐）'), 20)}",
                                    f"#pick {name} {tid} {qi} {k}") for k, o in enumerate(q.get("options") or [], 1)]
                 hint = "点按钮就是选它。都不合适？直接打字回答：引用这张卡片回复，或点〔✍️ 回复它〕再打字。"
+            elif q and len(qs) == 1:                     # 多选题：点一下勾上、再点取消，卡片原地刷新；最后点〔提交〕
+                got = self.state.get("multi", {}).get(name) or {}
+                picked = got.get("picked", []) if got.get("tid") == tid else []
+                buttons = [_button(f"{'☑' if k in picked else '☐'} {k}. {one_line(o.get('label', ''), 18)}", f"#mpick {name} {tid} {k}",
+                                   "primary" if k in picked else "default") for k, o in enumerate(q.get("options") or [], 1)]
+                buttons.append(_button(f"✅ 提交（选了 {len(picked)} 项）" if picked else "一个都不选，提交", f"#msubmit {name} {tid}",
+                                       "primary" if picked else "default"))
+                hint = "多选题：点选项勾上（再点一下取消），选好点〔提交〕。想说别的就直接打字，会先关掉这道题再把你的话发给它。"
             else:
-                hint = "这是多选题：直接打字回答（比如「1 和 3」）：引用这张卡片回复，或点〔✍️ 回复它〕再打字。"
+                hint = ("这是多选题：直接打字告诉它选哪几个（比如「1 和 3」），想说别的也直接打字。"
+                        "会先关掉这道题，再把你的话发给它，它看得到刚才问了什么。")
             text_opts = "\n".join(lines)
         else:
             title, color = f"🔐【{name}】要你批准", "yellow"
@@ -2584,6 +2595,35 @@ class Remote:
         els.append({"tag": "action", "actions": extra})
         card = Card(_card(title, color, els), f"{title}\n{body}")
         card.ask_id = tid
+        return card
+
+    def multi_pick(self, name, s, tid, k, reg, submit=False):
+        """多选题卡片上的按钮：勾 / 取消一项（卡片原地刷新），或〔提交〕。
+        提交时像在电脑上先按 Esc 关掉这道题，再把「我选：…」当普通消息发给它，比在终端里一格一格勾稳。"""
+        pt = waiting_on(s)
+        b = pt[0] if pt else {}
+        qs = ((b.get("input") or {}).get("questions") or []) if b.get("name") == "AskUserQuestion" else []
+        if tid not in (b.get("id"), b.get("alt_id")) or len(qs) != 1 or not dialog_options(pane_rows(s)):
+            card = alert(f"✅【{name}】这一步已经过去了", "可能你已经在电脑上答过了，这次没有按任何键。", "grey", [_button("看屏幕", f"屏 {name}")])
+            card.in_place = True
+            return card
+        multi = self.state.setdefault("multi", {})
+        got = multi.get(name) if (multi.get(name) or {}).get("tid") == tid else {"tid": tid, "picked": []}
+        opts = qs[0].get("options") or []
+        if not submit:
+            k = int(k)
+            got["picked"] = sorted(set(got["picked"]) ^ {k}) if 1 <= k <= len(opts) else got["picked"]
+            multi[name] = got
+            self.save()
+            card = self.ask_card(name, s, pt=pt)
+            card.in_place = True
+            return card
+        multi.pop(name, None)
+        chosen = [f"{k}. {opts[k - 1].get('label', '')}" for k in got["picked"]]
+        text = ("我选：" + "；".join(chosen) + "。没选的不做。") if chosen else "这几项一个都不选，都先不做。"
+        card = self.deliver(name, text, reg)
+        if isinstance(card, Card):
+            card.in_place = True
         return card
 
     def pick(self, name, s, tid, qi, n):
@@ -2647,13 +2687,28 @@ class Remote:
         return card
 
     def answer_with_text(self, name, s, text):
-        """它停在选择题上时你打了字：选「Type something」把你的话填进去。
-        填好了返回 None（照常显示进度）；要你点按钮（权限框）或还有下一题时返回要发给你的卡片。"""
+        """它停在选择题上时你打了字：单选题选「Type something」把你的话填进去；
+        多选题（或没有「Type something」的题）像在电脑上一样先按 Esc 关掉这道题，再把你的话当普通消息发过去，它看得到刚才问了什么。
+        发出去了返回 None（照常显示进度）；要你点按钮（权限框）或还有下一题时返回要发给你的卡片。"""
         rows = pane_rows(s)
         pt = waiting_on(s)
         b = pt[0] if pt else {}
         qs = ((b.get("input") or {}).get("questions") or []) if b.get("name") == "AskUserQuestion" else []
-        other = next((n for n, label in dialog_options(rows) if label.startswith("Type something")), None)
+        multi = any(q.get("multiSelect") for q in qs)
+        other = None if multi else next((n for n, label in dialog_options(rows)
+                                         if re.sub(r"^\[.\]\s*", "", label).startswith("Type something")), None)
+        if qs and not other and not builtin_question(qs[0]):
+            send_keys(s, ["esc"])
+            for _ in range(12):
+                time.sleep(0.3)
+                if not dialog_options(pane_rows(s)):
+                    break
+            else:
+                return self.ask_card(name, s, pt=pt, note="⚠️ 按了 Esc 想先关掉这道题，没关掉，你的话没有发出去。请点下面的按钮。") \
+                    or f"【{name}】停在一个选择框上，打的字没有发出去。点〔看屏幕〕看看。"
+            time.sleep(0.5)
+            send_text(s, text)
+            return None
         if not qs or not other:
             return self.ask_card(name, s, pt=pt, note="⚠️ 它在等你点选项，打的字没有发出去。请点下面的按钮。") \
                 or f"【{name}】停在一个选择框上，打的字没有发出去。点〔看屏幕〕看看。"
