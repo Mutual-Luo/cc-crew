@@ -929,20 +929,48 @@ def builtin_question(q):
     fb = re.search(r"Switch to (.+?) and keep going", text) or next(
         (x for o in opts if (x := re.search(r"Continue on (.+?) now", o.get("description", "")))), None)
     fb = fb.group(1).strip() if fb else "别的模型"
-    out = []
-    for o in opts:
-        label, desc = o.get("label", ""), o.get("description", "")
-        later = ("以后再被拦也自动换，不再问你（可以在 /config 改回来）" if "without asking" in desc
-                 else "以后再被拦还会问你" if "each time" in desc else "")
-        if label.startswith(("Switch", "Continue")):
-            out.append((f"换 {fb} 接着答", "；".join(x for x in (f"现在就用 {fb} 接着答", later) if x), "switch"))
-        elif label.startswith("Stay") or desc.startswith("Stop"):
-            out.append(("不换，先停下", "；".join(x for x in ("这次就不答了，你那段话会退回它的输入框", later) if x), "stay"))
-        else:
-            out.append((label, desc, None))
     what = next((cn for en, cn in SAFEGUARD_WHAT if en in text), "有时会误拦正常的问题")
-    return {"title": "回答被安全检查拦下了", "model": m.group(1).strip(), "options": out, "ask": f"要不要换 {fb} 接着答？",
+    return {"title": "回答被安全检查拦下了", "model": m.group(1).strip(), "ask": f"要不要换 {fb} 接着答？",
+            "options": [_safeguard_choice(o.get("label", ""), o.get("description", ""), fb) for o in opts],
             "intro": f"{m.group(1).strip()} 的安全检查把刚才那次回答停下了。这个检查管得比较严，{what}。"}
+
+
+def _safeguard_choice(label, desc, fb):
+    """安全检查那几种框里的一个选项 → (中文, 选了会怎样, "switch" / "stay" / None)。"""
+    later = ("以后再被拦也自动换，不再问你（可以在 /config 改回来）" if "without asking" in desc
+             else "以后再被拦还会问你" if "each time" in desc else "")
+    if label.startswith(("Switch", "Continue")):
+        return f"换 {fb} 接着答", "；".join(x for x in (f"现在就用 {fb} 接着答", later) if x), "switch"
+    if label.startswith(("Stay", "Edit prompt")) or desc.startswith("Stop"):
+        cn, now_ = ("改一下再问", "你那段话退回它的输入框，改好了再用原来的模型问") if label.startswith("Edit") \
+            else ("不换，先停下", "这次就不答了，你那段话会退回它的输入框")
+        return cn, "；".join(x for x in (now_, later) if x), "stay"
+    return label, desc, None
+
+
+def paused_question(rows):
+    """「Session paused」：安全检查又拦下了，对话停住，问你换模型还是改了再问。
+    这块底下没有「Esc to cancel」那行，dialog_options 认不出；认出来就跟 builtin_question 一样翻成中文，外加 "keys": [编号]。"""
+    tail = [r for r in rows if r][-30:]
+    top = next((i for i in range(len(tail) - 1, -1, -1) if tail[i] == "Session paused"), None)
+    if top is None:
+        return None
+    text, opts = [], []
+    for r in tail[top + 1:]:
+        m = OPTION_RE.match(r)
+        if m and int(m.group(1)) == len(opts) + 1:
+            opts.append(m.group(2).strip())
+        elif not opts:
+            text.append(r)
+    text = " ".join(text)
+    m = re.search(r"([\w .\-]+?)'s safeguards", text)
+    if not opts or not m:
+        return None
+    fb = next((x.group(1).strip() for o in opts if (x := re.match(r"Switch to (.+)", o))), "别的模型")
+    what = next((cn for en, cn in SAFEGUARD_WHAT if en in text), "有时会误拦正常的问题")
+    return {"title": "又被安全检查拦下了，对话暂停", "model": m.group(1).strip(), "keys": list(range(1, len(opts) + 1)),
+            "ask": f"换 {fb} 接着答，还是改一下再问？", "options": [_safeguard_choice(o, "", fb) for o in opts],
+            "intro": f"{m.group(1).strip()} 的安全检查又把回答停下了，这段对话先暂停。这个检查管得比较严，{what}。"}
 
 
 def screen_menu(rows):
@@ -1371,6 +1399,17 @@ def with_effort(args, level):
         elif not a.startswith("--effort="):
             out.append(a)
     return out + ["--effort", level] if level else out
+
+
+def slash_output(rows, word):
+    """斜杠命令发出后它的输出：屏幕上「❯ /compact」那行下面、输入框上面的几行，去掉 ⎿ 和「装好更新了」之类的提示。"""
+    box = _input_box(rows)
+    end = box[0] if box else len(rows)
+    start = max((i for i in range(end) if rows[i].split()[:2] == ["❯", word]), default=None)
+    if start is None:
+        return ""
+    out = [re.sub(r"^[⎿└]\s*", "", r).strip() for r in rows[start + 1:end]]
+    return "\n".join(r for r in out if r and not set(r) <= set("─━") and not re.search(r"Update installed|/restart to apply", r))
 
 
 def screen(s, lines=40):
@@ -2083,13 +2122,27 @@ class Remote:
             if word not in dict(cat or [(c, d) for c, _, d in SLASH]):
                 return self.cmds_card(name, s, query=word, cat=cat)   # 只打了「/」或半截：不能回车，回车会执行列表里第一个
         was_busy = s["status"] == "busy"
+        before = session_status(s).get("ctx")
         sent_at = now()
         send_text(s, body)
         time.sleep(2.5)
-        if not was_busy and (discover().get(name) or s)["status"] == "busy":
-            self.state.setdefault("slash", {})[name] = [sent_at, word]   # 比如 /compact：做完发「✅ 做完了」
+        running = not was_busy and (discover().get(name) or s)["status"] == "busy"
+        if running:
+            self.state.setdefault("slash", {})[name] = [sent_at, word, before]   # 比如 /compact：做完发「✅ 做完了」
             self.save()
-        return self.screen_card(name, s, note=f"➡️ 已把 {body} 发给【{name}】，下面是它现在的屏幕：")
+        rows = pane_rows(s)
+        if screen_menu(rows):                           # 弹了菜单（/model、/resume…）：要遥控键盘
+            return self.screen_card(name, s, note=f"➡️ 已把 {body} 发给【{name}】，用下面的按钮选：")
+        label, desc = next(((lb.split(" ", 1)[-1], d) for c, lb, d in SLASH if c == word), (word, ""))
+        if running:
+            title, color = f"⏳【{name}】正在{label}…", "wathet"
+            text = (f"{desc}。\n" if desc else "") + (f"现在上下文 {before}%，" if before is not None else "") + "做完再发一张卡片告诉你。"
+        else:
+            out = slash_output(rows, word)
+            title, color = f"⌨️【{name}】{label}", "blue"
+            text = f"<font color='grey'>{body}</font>\n" + (out if out else "已发出，没有输出。")
+        card = alert(title, "\n".join(x for x in (self.who(name, s), text) if x), color, [_button("看屏幕", f"屏 {name}")])
+        return card
 
     def broadcast(self, body, reg):
         """@所有人：发给每个在上班的员工，像开会。停在选择框上的先跳过；正在干活的，这句话会排在它手上的活后面。
@@ -2417,7 +2470,7 @@ class Remote:
         for _ in range(10):                             # 等框收起来，退回的那段话出现在输入框里
             time.sleep(0.3)
             rows = pane_rows(s)
-            if not dialog_options(rows):
+            if not dialog_options(rows) and not paused_question(rows):
                 break
         left = box_text(rows)
         buttons = [_button("看屏幕", f"屏 {name}")]
@@ -2461,18 +2514,19 @@ class Remote:
         opts = dialog_options(rows)
         if not opts and not s.get("waiting"):
             return None
-        pt = waiting_on(s, pt)
+        paused = paused_question(rows) if not opts else None
+        pt = None if paused else waiting_on(s, pt)
         b, said = pt if pt else ({}, [])
-        if not opts and not pt:
+        if not opts and not pt and not paused:
             return None
-        tid, inp = b.get("id") or "-", b.get("input") or {}
+        tid, inp = (f"p{s['statusAt']:.0f}" if paused else b.get("id") or "-"), b.get("input") or {}
         who = self.who(name, s)
         context = "\n\n".join(said)
         if not context and above_dialog(rows):
             context = f"<font color='grey'>它前面说的（屏幕上能看到的部分）：</font>\n{above_dialog(rows)}"
         lines, buttons = [], []
         qs = (inp.get("questions") or []) if b.get("name") == "AskUserQuestion" else []
-        built = builtin_question(qs[0]) if len(qs) == 1 else None
+        built = paused or (builtin_question(qs[0]) if len(qs) == 1 else None)
         if built:                                       # Claude Code 自己的框：中文说明，不贴屏幕上的英文和你自己那段话
             title, color = f"🛡️【{name}】{built['title']}", "orange"
             asked = last_human_text(s.get("sessionId"))
@@ -2534,10 +2588,18 @@ class Remote:
     def pick(self, name, s, tid, qi, n):
         """卡片上点了某个选项：先确认它还停在这一步（没在电脑上答过），再按对应的数字键。"""
         rows = pane_rows(s)
+        if tid.startswith("p"):                          # 「Session paused」那块：编号对得上、还是这一次暂停才按
+            paused = paused_question(rows)
+            if paused and tid == f"p{s['statusAt']:.0f}" and n.isdigit() and int(n) in paused["keys"]:
+                cn, _, how = paused["options"][int(n) - 1]
+                send_keys(s, [n])
+                if how == "stay":
+                    return self.stayed_card(name, s, paused["model"])
+                return self._picked_live(name, s, f"选了「{cn}」")
         opts = dialog_options(rows)
         pt = waiting_on(s)
         b = pt[0] if pt else {}
-        if not opts or (tid != "-" and tid not in (b.get("id"), b.get("alt_id"))):
+        if tid.startswith("p") or not opts or (tid != "-" and tid not in (b.get("id"), b.get("alt_id"))):
             card = alert(f"✅【{name}】这一步已经过去了", (self.who(name, s) + "\n" if self.who(name, s) else "") +
                          "可能你已经在电脑上处理过了，这次没有按任何键。", "grey",
                          [_button("看屏幕", f"屏 {name}"), _button("最新情况", f"看 {name}")])
@@ -2571,7 +2633,11 @@ class Remote:
                 return f"屏幕上没有第 {n} 个选项了，没有按键。点〔看屏幕〕看看。"
             picked = f"选了「{perm_label(text)}」"
             send_keys(s, [n])
-        since = now()                                   # 接着像发消息一样：这张卡片变成实时进度，做完变成回复
+        return self._picked_live(name, s, picked)
+
+    def _picked_live(self, name, s, picked):
+        """选完了：接着像发消息一样，这张卡片变成实时进度，做完变成回复。"""
+        since = now()
         self.state["remote_pending"][name] = since
         self.state.setdefault("asked_note", {})[name] = [since, picked]
         self.save()
@@ -2903,6 +2969,10 @@ class Remote:
                     sent[f"ask:{s['sessionId']}:{ask.ask_id}"] = now()          # 它在问你：这张卡片换成问题和选项
                 if self.state.get("current") == name:
                     self.state["current_at"] = now()
+                if s.get("waiting") and not ask:              # 停在一个认不出的框上：给屏幕和按键，不能当成答完了
+                    out.append((name, self.screen_card(name, s, note=f"⏸【{name}】停在下面这个框上等你选（机器人没认出是什么框）。"
+                                                                     "用下面的键操作，屏幕会跟着刷新。"), True))
+                    continue
                 if not heard:                                 # 一直没收到：别把上一轮的回复当成这次的
                     out.append((name, self.screen_card(name, s, note=f"⚠️ 你那句话好像没送到【{name}】：等了 20 秒它都没开始处理。"
                                                                      "下面是它现在的屏幕，看看是不是被什么挡住了，处理完再发一次。"), True))
@@ -3328,8 +3398,11 @@ class Remote:
                 note = self.state.get("slash", {}).get(name)
                 if note and note[0] <= e["statusAt"] + 1 and not is_quiet(name):     # 你发的 /compact 之类做完了
                     self.state["slash"].pop(name)
-                    ctx = ctx_text(session_status(e))
-                    once(f"idle:{episode}", alert(f"✅【{name}】{note[1]} 做完了", self.who(name, e) + (f"\n现在{ctx}" if ctx else ""), "green",
+                    after = session_status(e).get("ctx")
+                    label = next((lb.split(" ", 1)[-1] for c, lb, _ in SLASH if c == note[1]), note[1])
+                    ctx = (f"上下文 {note[2]}% → {after}%" if len(note) > 2 and note[2] is not None and after is not None
+                           else ctx_text(session_status(e)))
+                    once(f"idle:{episode}", alert(f"✅【{name}】{label}做完了", "\n".join(x for x in (self.who(name, e), ctx) if x), "green",
                                                    [_button("看屏幕", f"屏 {name}"), _button("✍️ 回复它", f"对话 {name}")]), "slash")
                     continue
                 remote = pending and pending <= e["statusAt"] + 1

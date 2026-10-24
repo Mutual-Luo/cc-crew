@@ -192,6 +192,21 @@ check("输入框里退回的上一句先清掉，再发你这句", pressed == ["
 screen_now[0], pressed[:] = ["─" * W, "❯ 我在电脑上打了一半", "─" * W], []
 r.deliver("exp", "新的一句", reg)
 check("你在电脑上打了一半的字不动", pressed == ["TEXT:新的一句"], pressed)
+screen_now[0], pressed[:] = ["上一轮", "● Opus 5.5's safeguards stopped the response above · continuing once with that noted", "─" * W,
+                             "Session paused", "Opus 5.5's safeguards flagged this session. You may be seeing this for the first time: "
+                             "Opus 5.5 is more capable and has stronger safeguards as a result, which can sometimes flag",
+                             "non-cybersecurity work. Edit and retry, or continue with Opus 4.8.", "Details: `[cyber]`",
+                             "❯ 1. Switch to Opus 4.8", "2. Edit prompt and retry with Opus 5.5",
+                             "✻ Waiting for API response · will retry in 2m 40s"], []
+s9.update(waiting="dialog open", status="waiting", statusAt=time.time() - 60)
+os.remove(os.path.join(crcore.ASKS, sid + ".json"))             # 这种框不走 hook，没有记录
+ask = r.ask_card("exp", s9)
+text = json.dumps(ask.card, ensure_ascii=False) if ask else ""
+check("「Session paused」也认出来，翻成中文", ask and "暂停" in ask.card["header"]["title"]["content"] and "Session paused" not in text
+      and "换 Opus 4.8 接着答" in text and "改一下再问" in text, text[:300])
+check("旧卡片上的按钮不乱按", r.pick("exp", s9, "p123", "0", "1").text.startswith("✅") and pressed == [], pressed)
+out = r.pick("exp", s9, ask.ask_id, "0", "1")
+check("点〔换 Opus 4.8〕：按 1，卡片变成实时进度", pressed == ["1"] and out.pending_for == "exp" and r.state["remote_pending"].get("exp"), pressed)
 crcore.pane_rows, crcore.send_keys, crcore.send_text, crcore.crterm.key, crcore.last_human_text, crcore.time.sleep = saved
 
 print(f"\n全部通过：{len(passed)} 项")
