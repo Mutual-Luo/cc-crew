@@ -211,10 +211,10 @@ screen_now[0], pressed[:] = MSCREEN, []
 s9.update(statusAt=time.time() - 5)
 ask = r.ask_card("exp", s9)
 cmds = [b["value"]["cmd"] for e in ask.card["elements"] if e.get("tag") == "action" for b in e["actions"]]
-check("多选题卡片有按钮：每项一个勾选，外加提交", f"#mpick exp {ask.ask_id} 1" in cmds and f"#msubmit exp {ask.ask_id}" in cmds, cmds)
+check("多选题卡片有按钮：每项一个勾选，外加提交", f"#mpick exp {ask.ask_id} 1 0" in cmds and f"#msubmit exp {ask.ask_id} - 0" in cmds, cmds)
 out = r.button_cmd(["mpick", "exp", ask.ask_id, "2"], reg)
 labels = [b["text"]["content"] for e in out.card["elements"] if e.get("tag") == "action" for b in e["actions"]]
-check("点一下勾上，卡片原地刷新", out.in_place and "☑ 2. 均匀刷新对照" in labels and "✅ 提交（选了 1 项）" in labels and pressed == [], (labels, pressed))
+check("点一下勾上，卡片原地刷新", out.in_place and "☑ 2 均匀刷新对照" in labels and "提交（选了 1 项）" in labels and pressed == [], (labels, pressed))
 r.button_cmd(["msubmit", "exp", ask.ask_id], reg)
 check("提交：关掉题，把「我选：…」发给它", pressed == ["esc", "TEXT:我选：2. 均匀刷新对照。没选的不做。"], pressed)
 os.remove(os.path.join(crcore.ASKS, sid + ".json"))

@@ -1,6 +1,6 @@
 # 演示视频怎么做的
 
-`demo.html` 是一段按时间线播放的网页动画（卡片和 cc-crew 发到飞书的卡片同一个结构）。`rec.py` 用 Playwright 暂停浏览器时钟、一帧一帧截图，再用 ffmpeg 合成：
+`demo.html` 是一段按时间线播放的网页动画（卡片和 cc-crew 发到飞书的新版卡片同一个结构；员工、任务、目录都是虚构的）。`rec.py` 用 Playwright 暂停浏览器时钟、一帧一帧截图，再用 ffmpeg 合成：
 
 ```bash
 pip install playwright && playwright install chromium

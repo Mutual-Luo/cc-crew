@@ -466,7 +466,7 @@ class Feishu:
         from lark_oapi.event.callback.model.p2_card_action_trigger import P2CardActionTriggerResponse
         ev = data.event
         if self.authorized(ev.operator.open_id):
-            cmd = (ev.action.value or {}).get("cmd", "")
+            cmd = (ev.action.value or {}).get("cmd", "") or ev.action.option or ""   # 按钮带 value；「···」菜单里点的是 option
             if cmd:
                 self.jobs.put(("cmd", cmd, ev.context.open_message_id if ev.context else None))
         return P2CardActionTriggerResponse({"toast": {"type": "info", "content": "收到"}})
@@ -619,6 +619,19 @@ def monitor_loop(feishu):
                     if not feishu:
                         continue
                     msg = crcore.as_card(item) if item.get("card") else item["text"]
+                    if item.get("pending_for"):          # 你在电脑上叫员工干活：这张实时卡片跟飞书发起的一样登记、刷新
+                        mid = feishu.send(msg)
+                        if mid:
+                            with lock:
+                                pend = crcore.load_json(PENDING, {})
+                                old = pend.get(item["pending_for"])
+                                pend[item["pending_for"]] = mid
+                                crcore.save_json(PENDING, pend)
+                            feishu.after[mid] = 0
+                            if old and old != mid:
+                                feishu.after.pop(old, None)
+                                feishu.recall(old)
+                        continue
                     if item.get("merge"):
                         feishu.merge(msg)
                         continue

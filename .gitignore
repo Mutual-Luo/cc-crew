@@ -11,9 +11,13 @@ assistant-prompt.local.md
 # 这台机器自己的启动脚本（示例在 examples/）
 bin/claude-launch.sh
 bin/claude-inner.sh
-# 备份
+# 备份、改版时的暂存副本
 *.bak-*
 lib.prev/
+lib.next/
 bin.prev/
 bin.next/
 __pycache__/
+# 录演示视频时的中间帧
+docs/demo-src/frames/
+docs/demo-src/stills/

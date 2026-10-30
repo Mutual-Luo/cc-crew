@@ -35,24 +35,46 @@
   .who { font-size: 10.5px; color: #8f959e; margin-bottom: 3px; }
   .who i { font-style: normal; background: #fff3d6; color: #a46a00; border-radius: 3px; padding: 0 3px; margin-left: 3px; font-size: 9.5px; }
   .me .bub { background: var(--bubble); color: #fff; border-radius: 12px 2px 12px 12px; padding: 8px 11px; font-size: 13px; max-width: 250px; line-height: 1.5; }
+
+  /* 卡片：和 cc-crew 新版卡片同一个结构——标题（工号 名字 · 状态 + 类型标签）、副标题（任务 目录）、
+     说给它的话（浅底块 + 来源标签）、回答、一行小按钮（多的收进 ···）、一行底栏标签 */
   .card { width: 296px; background: #fff; border-radius: 10px; overflow: hidden; border: 1px solid #e5e6eb; color: #1f2329; }
-  .card .hd { padding: 9px 12px; font-weight: 700; font-size: 13.5px; }
-  .card .bd { padding: 8px 12px 10px; font-size: 12px; line-height: 1.6; }
+  .card .hd { padding: 8px 12px 7px; }
+  .card .ttl { display: flex; align-items: flex-start; justify-content: space-between; gap: 6px; font-weight: 700; font-size: 13.5px; }
+  .card .ttl span { line-height: 1.35; }
+  .card .sub { font-size: 10.5px; color: #646a73; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .kind { flex: none; font-style: normal; font-weight: 500; font-size: 9.5px; padding: 1px 5px; border-radius: 3px; background: rgba(31,35,41,.08); color: #4e5969; }
+  .kind.cx { background: #eee5fc; color: #6425d0; }
+  .card .bd { padding: 7px 12px 8px; font-size: 12px; line-height: 1.6; }
   .card .bd p { margin: 2px 0; white-space: pre-wrap; }
   .card .grey { color: #8f959e; }
   .card hr { border: 0; border-top: 1px solid #eef0f2; margin: 7px 0; }
-  .card .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
-  .card .acts.bi .btn { flex: 1 1 calc(50% - 6px); }
-  .btn { border: 1px solid #d0d3d6; border-radius: 6px; padding: 4px 8px; font-size: 11.5px; text-align: center; background: #fff; position: relative; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tag { display: inline-block; font-style: normal; font-size: 9.5px; line-height: 15px; padding: 0 5px; border-radius: 3px; margin-right: 3px;
+         background: #f2f3f5; color: #646a73; vertical-align: 1px; }
+  .tag.blue { background: #e1eaff; color: #245bdb; } .tag.turq { background: #d5f6f2; color: #078372; }
+  .tag.orange { background: #fee7cd; color: #c25705; } .tag.red { background: #fde2e2; color: #d1291f; } .tag.green { background: #d9f5d6; color: #237b19; }
+  .q { border-radius: 6px; padding: 5px 8px; margin: 3px 0; font-size: 11.5px; line-height: 1.6; }
+  .q.me { background: #eff4ff; } .q.peer { background: #eaf7ec; } .q.grey { background: #f5f6f7; }
+  .q div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .q .dot { color: #8f959e; margin-right: 4px; }
+  .flow { font-size: 10.5px; color: #8f959e; line-height: 1.65; }
+  .opt { background: #f5f6f7; border-radius: 6px; padding: 5px 8px; margin: 4px 0; }
+  .opt pre { font-family: "JetBrains Mono", "Noto Sans SC", monospace; font-size: 10px; line-height: 1.35; color: #1f2329; margin-top: 3px; }
+  .card .acts { display: flex; gap: 5px; margin-top: 7px; }
+  .card .acts.bi .btn { flex: 1 1 0; }
+  .btn { border: 1px solid #d0d3d6; border-radius: 5px; padding: 2px 8px; font-size: 11px; text-align: center; background: #fff; position: relative; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .btn.primary { border-color: #3370ff; color: #3370ff; }
   .btn.danger { border-color: #f54a45; color: #f54a45; }
+  .btn.more { padding: 2px 7px; color: #646a73; letter-spacing: 1px; }
   .btn.hit { background: #e1eaff; }
-  .card .note { font-size: 10.5px; color: #8f959e; margin-top: 7px; }
+  .card .note { font-size: 10px; color: #8f959e; margin-top: 7px; }
+  .card .foot { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 3px; }
+  .card .foot .tag { margin: 0; }
   .t-wathet .hd { background: #e1f3fb; color: #0b6aa8; } .t-green .hd { background: #e3f6e5; color: #1f7a33; }
   .t-orange .hd { background: #fdecdc; color: #b55a00; } .t-carmine .hd { background: #fde2e6; color: #b4142c; }
   .t-grey .hd { background: #eef0f2; color: #4e5969; } .t-blue .hd { background: #e1eaff; color: #1d4fd8; }
-  .t-purple .hd { background: #efe6fd; color: #6b2fb3; } .t-yellow .hd { background: #fdf5d6; color: #8a6d00; }
-  #tap { position: absolute; width: 34px; height: 34px; border-radius: 50%; background: rgba(51,112,255,.35);
+  .t-yellow .hd { background: #fdf5d6; color: #8a6d00; } .t-turquoise .hd { background: #d9f5f1; color: #0b7a6c; }
+  #tap { position: absolute; width: 30px; height: 30px; border-radius: 50%; background: rgba(51,112,255,.35);
          border: 2px solid rgba(51,112,255,.8); pointer-events: none; opacity: 0; z-index: 9; transform: translate(-50%,-50%); }
 
   /* 右边：说明 + 终端 */
@@ -64,11 +86,14 @@
           grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 10px; }
   .pane { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
   .pane.flash { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(217,119,87,.35); }
-  .pane .tt { font-size: 12px; padding: 6px 10px; background: #1d212a; color: var(--dim); display: flex; justify-content: space-between; }
+  .pane .tt { font-size: 12px; padding: 6px 10px; background: #1d212a; color: var(--dim); display: flex; justify-content: space-between; align-items: center; }
   .pane .tt b { color: var(--fg); font-weight: 600; }
+  .pane .tt i { font-style: normal; font-size: 10px; padding: 0 5px; border-radius: 3px; margin-left: 6px; background: #2a3040; color: #aab3c5; }
+  .pane .tt i.cx { background: #3a2a5c; color: #c9b1ff; }
   .pane .tx { flex: 1; padding: 8px 10px; font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; color: #cfd3dc; overflow: hidden;
               display: flex; flex-direction: column; justify-content: flex-end; }
   .tx .o { color: var(--accent); } .tx .g { color: #7ee2a8; } .tx .d { color: #6b7385; } .tx .y { color: #f2c94c; } .tx .b { color: #8ab4ff; }
+  .tx .p { color: #c9b1ff; }
   .tx .box { border-top: 1px solid #2c3240; border-bottom: 1px solid #2c3240; margin-top: 5px; padding: 2px 0; }
   #end { position: absolute; inset: 0; background: radial-gradient(circle at 50% 40%, #1d2230, #0b0d12); display: none; z-index: 20;
          flex-direction: column; align-items: center; justify-content: center; text-align: center; }
@@ -81,30 +106,51 @@
 <body>
 <div id="phone"><div id="screen">
   <div id="bar"><b>我的 Claude 员工们</b><span>1 名成员 · 1 个机器人</span></div>
-  <div id="pin">📌 <b>📋 员工看板</b> <small>· 置顶</small></div>
+  <div id="pin">📌 <b>员工看板</b> <small>· 置顶</small></div>
   <div id="feed"><div id="inner"></div></div>
   <div id="input"><div class="ph" id="typing">发消息给 员工群</div></div>
 </div><div id="tap"></div></div>
 
 <div id="cap"><div class="zh" id="capzh"></div><div class="en" id="capen"></div></div>
 <div id="grid"></div>
-<div id="end"><h1>cc-<span>crew</span></h1><p>在飞书里当老板，管你电脑上的一群 Claude Code</p>
-  <p style="font-size:17px">Be the boss of your Claude Code crew — from your phone.</p>
+<div id="end"><h1>cc-<span>crew</span></h1><p>在飞书里当老板，管你电脑上的一群 Claude Code 和 Codex</p>
+  <p style="font-size:17px">Be the boss of your Claude Code &amp; Codex crew, from your phone.</p>
   <code class="mono">git clone …/cc-crew &amp;&amp; python install.py</code><div class="url mono">github.com/Mutual-Luo/cc-crew</div></div>
 
 <script>
-// ---------------------------------------------------------------- 卡片：跟 cc-crew 发到飞书的卡片同一个结构（header + elements）
-const md = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/&lt;font color='grey'>(.*?)&lt;\/font>/gs, "<span class='grey'>$1</span>")
-                 .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+// ---------------------------------------------------------------- 卡片
+const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;");
+const md = s => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+const tag = (t, c = "") => `<i class="tag ${c}">${esc(t)}</i>`;
+// c = {title, kind, sub, color, els: [...], foot: [标签…], time, live, hint}
+// els：{q: [[来源, 颜色, 文字, 额外标签], …], tone} 说给它的话；{md}；{hr}；{flow: [行…]}；{acts: [[字, 样式, id]…], more}；
+//      {pairs: [[字, 样式, id]…]}；{opts: [[编号, 名字, 说明, 预览]…]}；{note}
 function cardHTML(c) {
-  let h = `<div class="card t-${c.color}"><div class="hd">${md(c.title)}</div><div class="bd">`;
+  let h = `<div class="card t-${c.color}"><div class="hd"><div class="ttl"><span>${md(c.title)}</span>`
+        + (c.kind ? `<i class="kind ${c.kind.startsWith("Codex") ? "cx" : ""}">${c.kind}</i>` : "") + "</div>"
+        + (c.sub ? `<div class="sub">${esc(c.sub)}</div>` : "") + `</div><div class="bd">`;
   for (const e of c.els) {
-    if (e.md !== undefined) h += `<p>${md(e.md)}</p>`;
+    if (e.q) {
+      let prev = null;
+      h += `<div class="q ${e.tone || "me"}">` + e.q.map(([src, col, text, extra]) => {
+        const same = src === prev; prev = src;
+        return `<div>${same ? "<span class='dot'>·</span>" : src ? tag(src, col) : ""}${(extra || []).map(x => tag(x[0], x[1])).join("")}${md(text)}</div>`;
+      }).join("") + "</div>";
+    }
+    else if (e.md !== undefined) h += `<p>${md(e.md)}</p>`;
     else if (e.hr) h += "<hr>";
-    else if (e.acts) h += `<div class="acts ${e.bi ? "bi" : ""}">` + e.acts.map(([t, k, id]) =>
-      `<div class="btn ${k || ""}" ${id ? `id="${id}"` : ""}>${md(t)}</div>`).join("") + "</div>";
+    else if (e.flow) h += `<div class="flow">${e.flow.map(md).join("<br>")}</div>`;
+    else if (e.acts) h += `<div class="acts">` + e.acts.map(([t, k, id]) => `<div class="btn ${k || ""}" ${id ? `id="${id}"` : ""}>${md(t)}</div>`).join("")
+                        + (e.more ? `<div class="btn more">···</div>` : "") + "</div>";
+    else if (e.pairs) for (let i = 0; i < e.pairs.length; i += 2) h += `<div class="acts bi">` + e.pairs.slice(i, i + 2).map(([t, k, id]) =>
+                        `<div class="btn ${k || ""}" ${id ? `id="${id}"` : ""}>${md(t)}</div>`).join("") + "</div>";
+    else if (e.opts) h += e.opts.map(([n, name, desc, pre]) => `<div class="opt"><b>${n}. ${esc(name)}</b><br><span class="grey">${esc(desc)}</span>`
+                        + (pre ? `<pre>${esc(pre)}</pre>` : "") + "</div>").join("");
     else if (e.note) h += `<div class="note">${md(e.note)}</div>`;
   }
+  if (c.hint) h += `<div class="note">${md(c.hint)}</div>`;
+  h += `<div class="foot">` + (c.foot || []).map(t => Array.isArray(t) ? tag(t[0], t[1]) : tag(t)).join("")
+     + tag(c.live ? "自动刷新 " + c.time : (c.time || "08:12")) + "</div>";
   return h + "</div></div>";
 }
 let seq = 0;
@@ -135,151 +181,194 @@ function tap(btnId) {
   tapEl.style.opacity = 1; b.classList.add("hit");
   setTimeout(() => { tapEl.style.opacity = 0; }, 450);
 }
-// 打字：一个字一个字出现，然后「发出」
+// 手机上打字：一个字一个字出现，然后「发出」
 function type(text, ms, done) {
   typing.className = ""; let i = 0;
   const step = () => { i++; typing.textContent = text.slice(0, i); if (i < text.length) setTimeout(step, ms); else setTimeout(() => {
     typing.className = "ph"; typing.textContent = "发消息给 员工群"; me(text); done && done(); }, 350); };
   step();
 }
+// 终端里打字：输入框里一个字一个字出现
+function typeTerm(key, before, text, ms, done) {
+  let i = 0;
+  const step = () => { i++; term(key, before.concat([box(text.slice(0, i))])); if (i < text.length) setTimeout(step, ms); else done && setTimeout(done, 300); };
+  step();
+}
 function caption(zh, en) { capzh.innerHTML = zh; capen.textContent = en; }
 
-// ---------------------------------------------------------------- 右边四个终端（tmux 里真的 Claude Code）
+// ---------------------------------------------------------------- 右边四个终端（tmux 里真的 Claude Code / Codex）
 const panes = {};
-function pane(key, title, sub) {
+function pane(key, title, kind, sub) {
   const el = document.createElement("div"); el.className = "pane";
-  el.innerHTML = `<div class="tt"><b>${title}</b><span>${sub}</span></div><div class="tx mono"></div>`;
+  el.innerHTML = `<div class="tt"><span><b>${title}</b><i class="${kind.startsWith("Codex") ? "cx" : ""}">${kind}</i></span><span>${sub}</span></div><div class="tx mono"></div>`;
   grid.appendChild(el); panes[key] = el; return el;
 }
 function term(key, lines) { panes[key].querySelector(".tx").innerHTML = "<div>" + lines.join("\n") + "</div>"; }
 function flash(key) { const p = panes[key]; p.classList.add("flash"); setTimeout(() => p.classList.remove("flash"), 900); }
 const box = (s = "") => `<div class="box">❯ ${s}</div>`;
+const cbox = (s = "") => `<div class="box"><span class="p">›</span> ${s}</div>`;
 
 // ---------------------------------------------------------------- 时间线
 const T = []; const at = (s, f) => T.push([s * 1000, f]);
-const board = (lines, extra = []) => ({ title: "📋 员工看板", color: "wathet", els: [{ md: lines.join("\n") }, ...extra,
-  { note: "点名字＝看详情并开始跟它说话 · 5 小时额度 12% · 周额度 31%" }] });
-const B1 = ["🟢 干活中　1号 **exp-baseline** · 跑基线", "🟢 干活中　2号 **paper** · 改论文第 4 节",
-            "🙋 等你拍板　3号 **refactor**", "⏸ 空闲　**助手**（秘书）"];
+const CC = "CC", CX = "Codex·官方", OPUS = "Opus", GPT = "gpt-5-codex";
+const board = (lines, extra = []) => ({ title: "员工看板", color: "wathet", els: [{ md: lines.join("\n") }, ...extra], foot: ["额度 12% / 31%"] });
+const B1 = ["🟢 干活中　1号 CC **exp-baseline** · 跑基线", "🟢 干活中　2号 CC **paper** · 改论文第 4 节",
+            "🙋 等你拍板　3号 Codex **cx-refactor**", "⏸ 空闲　CC **助手**（秘书）"];
 
 at(0, () => {
-  pane("p1", "1号 exp-baseline", "~/proj/exp");
-  pane("p2", "2号 paper", "~/proj/paper");
-  pane("p3", "3号 refactor", "~/proj/app");
-  pane("p4", "助手（秘书）", "~");
+  pane("p1", "1号 exp-baseline", CC, "~/proj/exp");
+  pane("p2", "2号 paper", CC, "~/proj/paper");
+  pane("p3", "3号 cx-refactor", CX, "~/proj/app");
+  pane("p4", "助手（秘书）", CC, "~");
   term("p1", ["<span class='o'>●</span> Bash(python train.py --cfg base.yaml)", "  <span class='d'>⎿ epoch 3/20 · loss 0.412</span>", "<span class='o'>✻</span> Running… <span class='d'>(4m 12s)</span>", box()]);
   term("p2", ["<span class='o'>●</span> Read(sections/4-method.tex)", "<span class='o'>●</span> Update(sections/4-method.tex)", "  <span class='d'>⎿ 改了 6 行</span>", "<span class='o'>✻</span> Thinking… <span class='d'>(38s)</span>", box()]);
-  term("p3", ["<span class='o'>●</span> 两种做法：", "  A. 先拆 service 层，再改接口", "  B. 先补测试，再一点点拆", "  C. 直接重写这个模块", "  你选哪个？", box()]);
+  term("p3", ["<span class='p'>•</span> 两种做法：", "  A. 先拆 service 层，再改接口", "  B. 先补测试，再一点点拆", "  C. 直接重写这个模块", "  你选哪个？", cbox()]);
   term("p4", ["<span class='d'>（空闲，等你吩咐）</span>", box()]);
-  caption("4 个 Claude Code 在服务器上干活，<em>我在地铁上</em>", "4 Claude Code sessions working on my server. I'm on the subway.");
+  caption("3 个 Claude Code、1 个 Codex 在服务器上干活，<em>我在地铁上</em>", "Claude Code and Codex sessions working on my server. I'm on the subway.");
   window.bid = botCard(board(B1));
 });
-at(3.2, () => {
-  caption("要我拍板的，<em>做成按钮</em>", "Decisions become buttons.");
-  window.ask = botCard({ title: "🙋 3号【refactor】：老板，需要你拍板", color: "carmine", els: [
-    { md: "<font color='grey'>📌 重构支付模块 · ~/proj/app</font>" },
+at(3.0, () => {
+  caption("要我拍板的，<em>做成按钮</em>", "Decisions become buttons. Codex works the same way.");
+  window.ask = botCard({ title: "3号 cx-refactor · 需要你拍板", kind: CX, sub: "重构支付模块　　~/proj/app", color: "carmine", els: [
     { md: "两种做法：\n**A.** 先拆 service 层，再改接口\n**B.** 先补测试，再一点点拆\n**C.** 直接重写这个模块\n你选哪个？" },
-    { acts: [["A", ""], ["B", "", "bB"], ["C", ""], ["✍️ 回复它", "primary"]] }] });
+    { pairs: [["A. 先拆 service 层", "primary"], ["B. 先补测试", "primary", "bB"], ["C. 直接重写", "primary"], ["按你推荐的", ""]] },
+    { acts: [["回复它", "primary"], ["看全文", ""]], more: 1 }], foot: [GPT, "上下文 41%"] });
 });
-at(5.4, () => tap("bB"));
-at(5.9, () => {
-  setCard(ask, { title: "⏳ 3号【refactor】正在执行 · 3秒", color: "wathet", els: [
-    { md: "<font color='grey'>你 → 【refactor】：B</font>" }, { hr: 1 },
-    { md: "📖 读取 payment/service.py\n**⚙️ 运行命令** pytest tests/payment -q ⏳" }, { hr: 1 },
-    { md: "⏳ **正在执行…**　已 3秒" }, { acts: [["⏹ 停止", "danger"], ["🧠 思考：高", ""], ["看屏幕", ""]] }] });
-  term("p3", ["<span class='b'>❯ B</span>", "<span class='o'>●</span> 好，先补测试。", "<span class='o'>●</span> Read(payment/service.py)", "<span class='o'>●</span> Bash(pytest tests/payment -q)", "<span class='o'>✻</span> Running… <span class='d'>(3s)</span>", box()]);
+at(5.0, () => tap("bB"));
+at(5.5, () => {
+  setCard(ask, { title: "3号 cx-refactor · 正在执行 · 3秒", kind: CX, sub: "重构支付模块　　~/proj/app", color: "wathet", live: 1, time: "08:13:05", els: [
+    { q: [["你 · 飞书", "blue", "我选 B"]] }, { hr: 1 },
+    { flow: ["读取　payment/service.py　1秒", "运行命令　pytest tests/payment -q　· 进行中"] },
+    { acts: [["停止", "danger"], ["刷新", ""], ["看屏幕", ""]], more: 1 }], foot: [GPT, "上下文 42%"] });
+  term("p3", ["<span class='b'>› 我选 B</span>", "<span class='p'>•</span> 好，先补测试。", "<span class='p'>•</span> Ran pytest tests/payment -q", "<span class='d'>  Working (3s · esc to interrupt)</span>", cbox()]);
   flash("p3");
-  setCard(bid, board(["🟢 干活中　1号 **exp-baseline** · 跑基线", "🟢 干活中　2号 **paper** · 改论文第 4 节",
-                      "🟢 干活中　3号 **refactor** · 先补测试", "⏸ 空闲　**助手**（秘书）"]));
+  setCard(bid, board(["🟢 干活中　1号 CC **exp-baseline** · 跑基线", "🟢 干活中　2号 CC **paper** · 改论文第 4 节",
+                      "🟢 干活中　3号 Codex **cx-refactor** · 先补测试", "⏸ 空闲　CC **助手**（秘书）"]));
 });
-at(8.6, () => {
-  caption("要权限的，<em>点一下就允许</em>", "Permission prompts → Allow / Deny.");
+at(7.8, () => {
+  caption("要权限的，<em>点一下就允许</em>", "Permission prompts: Allow / Always / Deny.");
   term("p1", ["<span class='o'>●</span> Bash(python train.py --cfg base.yaml)", "  <span class='d'>⎿ 20/20 · acc 81.3</span>", "<span class='y'>Bash command</span>", "  pip install -U wandb", "<span class='y'>Do you want to proceed?</span>", "<span class='b'>❯ 1. Yes</span>", "  2. Yes, and don't ask again", "  3. No"]);
-  window.perm = botCard({ title: "🔐 1号【exp-baseline】要你批准", color: "yellow", els: [
-    { md: "<font color='grey'>📌 跑基线 · ~/proj/exp</font>" },
-    { md: "它想：**⚙️ 运行命令**\n`pip install -U wandb`" },
-    { acts: [["允许这一次", "primary", "bOK"], ["允许，以后不再问", ""], ["不允许", "danger"]], bi: 1 }] });
+  window.perm = botCard({ title: "1号 exp-baseline · 要你批准", kind: CC, sub: "跑基线　　~/proj/exp", color: "yellow", els: [
+    { md: "**它想运行命令**" }, { q: [["", "", "pip install -U wandb"]], tone: "grey" },
+    { acts: [["允许", "primary", "bOK"], ["总是允许", ""], ["拒绝", "danger"]] },
+    { acts: [["回复它", ""], ["看屏幕", ""]] }], hint: "拒绝后它会停下来，再告诉它改做什么" });
 });
-at(10.6, () => tap("bOK"));
-at(11.1, () => {
-  setCard(perm, { title: "⏳ 1号【exp-baseline】正在执行 · 1秒", color: "wathet", els: [
-    { md: "<font color='grey'>你 → 【exp-baseline】：选了「允许这一次」</font>" }, { hr: 1 },
-    { md: "**⚙️ 运行命令** pip install -U wandb ⏳" }, { acts: [["⏹ 停止", "danger"], ["看屏幕", ""]] }] });
+at(9.6, () => tap("bOK"));
+at(10.1, () => {
+  setCard(perm, { title: "1号 exp-baseline · 正在执行 · 1秒", kind: CC, sub: "跑基线　　~/proj/exp", color: "wathet", live: 1, time: "08:14:21", els: [
+    { q: [["你 · 飞书", "blue", "选了「允许」"]] }, { hr: 1 }, { flow: ["运行命令　pip install -U wandb　· 进行中"] },
+    { acts: [["停止", "danger"], ["刷新", ""], ["看屏幕", ""]], more: 1 }], foot: [OPUS, "上下文 23%"] });
   term("p1", ["<span class='o'>●</span> Bash(pip install -U wandb)", "  <span class='d'>⎿ Successfully installed wandb-0.19.1</span>", "<span class='o'>●</span> 把结果同步到 wandb…", "<span class='o'>✻</span> Running… <span class='d'>(2s)</span>", box()]);
   flash("p1");
 });
-at(13.2, () => {
+at(11.8, () => {
+  caption("在电脑上亲手打的字，<em>飞书里也看得到</em>", "What you type in the terminal shows up in Feishu, labeled by source.");
+  const before = ["<span class='o'>●</span> 第 4 节改好了，一页半。", "<span class='o'>✻</span> Done <span class='d'>(2m 3s)</span>"];
+  typeTerm("p2", before, "第 4 节再精简一点，控制在一页内", 45, () => {
+    term("p2", ["<span class='b'>❯ 第 4 节再精简一点，控制在一页内</span>", "<span class='o'>●</span> Read(sections/4-method.tex)", "<span class='o'>✻</span> Thinking… <span class='d'>(4s)</span>", box()]);
+    flash("p2");
+    window.term2 = botCard({ title: "2号 paper · 正在思考 · 4秒", kind: CC, sub: "改论文第 4 节　　~/proj/paper", color: "wathet", live: 1, time: "08:15:40", els: [
+      { q: [["你 · 终端", "blue", "第 4 节再精简一点，控制在一页内"]] }, { hr: 1 },
+      { flow: ["读取　sections/4-method.tex", "思考　4秒"] },
+      { acts: [["停止", "danger"], ["刷新", ""], ["看屏幕", ""]], more: 1 }], foot: [OPUS, "上下文 37%"] });
+  });
+});
+at(15.4, () => {
+  setCard(term2, { title: "2号 paper", kind: CC, sub: "改论文第 4 节　　~/proj/paper", color: "green", els: [
+    { q: [["你 · 终端", "blue", "第 4 节再精简一点，控制在一页内"]] }, { hr: 1 },
+    { md: "**第 4 节压到了一页内。**\n删了重复的两段推导，图 3 挪到附录，正文引用都改好了。" },
+    { acts: [["回复它", "primary"], ["看全文", ""]], more: 1 }], foot: ["用时 38秒 · 4 步", OPUS, "上下文 39%"] });
+  term("p2", ["<span class='o'>●</span> Update(sections/4-method.tex)", "  <span class='d'>⎿ 删了 18 行</span>", "<span class='o'>●</span> 第 4 节压到了一页内。", box()]);
+});
+at(17.0, () => {
   caption("随口一句，<em>秘书去招人</em>", "Tell the secretary. It hires a new session.");
-  type("招个人把 repo-x 的测试跑通", 70);
+  type("招个人把 repo-x 的测试跑通", 60);
 });
-at(15.6, () => {
-  term("p4", ["<span class='b'>❯ 招个人把 repo-x 的测试跑通</span>", "<span class='o'>●</span> Bash(cr 新建 tester ~/proj/repo-x)", "  <span class='d'>⎿ 已在 tmux 里开好 5号 tester</span>", "<span class='o'>●</span> 已派活：跑通 repo-x 的测试", box()]);
+at(19.2, () => {
+  term("p4", ["<span class='b'>❯ 招个人把 repo-x 的测试跑通</span>", "<span class='o'>●</span> Bash(cr 新建 tester ~/proj/repo-x)", "  <span class='d'>⎿ 已开好 5号 tester</span>", "<span class='o'>●</span> 已派活：跑通 repo-x 的测试", box()]);
   flash("p4");
-  botCard({ title: "💬【助手】", color: "green", els: [{ md: "<font color='grey'>✓ 用时 9秒 · 做了 2 步</font>" },
+  botCard({ title: "助手", kind: CC, color: "green", els: [
     { md: "招好了：**5号 tester**，在 ~/proj/repo-x。\n已经让它去跑测试、修到全部通过，修完会给你汇报。" },
-    { acts: [["看全文", ""], ["新对话", ""]] }] });
+    { acts: [["看全文", ""], ["新对话", ""]], more: 1 }], foot: ["用时 9秒 · 2 步", OPUS] });
 });
-at(17.3, () => {
-  caption("新员工入职，<em>实时看它干到哪</em>", "Live progress: every step, a ticking timer.");
+function live5(sec, steps, extra = {}) {
+  return Object.assign({ title: `5号 tester · 正在执行 · ${sec}秒`, kind: CC, sub: "跑通 repo-x 的测试　　~/proj/repo-x", color: "wathet", live: 1,
+    time: "08:17:" + String(10 + sec).padStart(2, "0"), els: [{ flow: steps }, { acts: [["停止", "danger"], ["刷新", ""], ["看屏幕", ""]], more: 1 }],
+    foot: [OPUS, "上下文 12%"] }, extra);
+}
+at(20.6, () => {
+  caption("新员工入职，<em>实时看它干到哪</em>", "Live progress: each step with its duration.");
   panes.p4.querySelector(".tt b").textContent = "5号 tester";
-  panes.p4.querySelector(".tt span").textContent = "~/proj/repo-x";
+  panes.p4.querySelector(".tt span:last-child").textContent = "~/proj/repo-x";
   term("p4", ["<span class='o'>●</span> Bash(pytest -q)", "  <span class='d'>⎿ 3 failed, 39 passed</span>", "<span class='o'>✻</span> Thinking… <span class='d'>(6s)</span>", box()]);
   flash("p4");
-  window.live = botCard(liveCard(6, ["📖 读取 tests/test_api.py", "**⚙️ 运行命令** pytest -q ⏳"]));
+  window.live = botCard(live5(6, ["运行命令　pytest -q　3秒", "思考　6秒"]));
 });
-function liveCard(sec, steps) {
-  return { title: `⏳ 5号【tester】正在执行 · ${sec}秒`, color: "wathet", els: [
-    { md: "<font color='grey'>📌 跑通 repo-x 的测试 · ~/proj/repo-x</font>" }, { hr: 1 }, { md: steps.join("\n") }, { hr: 1 },
-    { md: `⏳ **正在执行…**　已 ${sec}秒` }, { acts: [["⏹ 停止", "danger"], ["🧠 思考：高", ""], ["看屏幕", ""]] }] };
-}
-at(18.6, () => setCard(live, liveCard(14, ["📖 读取 tests/test_api.py", "⚙️ 运行命令 pytest -q", "🧠 想了想：时区没处理，3 个失败都是这个", "**✏️ 修改** api/time.py ⏳"])));
-at(19.9, () => { setCard(live, liveCard(27, ["⚙️ 运行命令 pytest -q", "🧠 想了想：时区没处理，3 个失败都是这个", "✏️ 修改 api/time.py", "**⚙️ 运行命令** pytest -q ⏳"]));
-  term("p4", ["<span class='o'>●</span> Update(api/time.py)", "  <span class='d'>⎿ 改了 4 行</span>", "<span class='o'>●</span> Bash(pytest -q)", "  <span class='g'>⎿ 42 passed</span>", box()]); });
-at(21.4, () => {
-  setCard(live, { title: "📝 5号【tester】：汇报", color: "orange", els: [{ md: "<font color='grey'>✓ 用时 41秒 · 想了 2 次 · 做了 5 步</font>" },
-    { md: "**测试全部通过（42 passed）。**\n3 个失败都是同一个原因：时间没带时区。改了 api/time.py 4 行，没动别的文件。" },
-    { acts: [["✍️ 回复它", "primary"], ["看全文", ""], ["🔎 看过程", ""]] }] });
+at(21.9, () => setCard(live, live5(14, ["运行命令　pytest -q　3秒", "思考　8秒", "修改　api/time.py　· 进行中"])));
+at(23.0, () => {
+  caption("它在忙也能插话：<em>排着队的话，一键立即发送</em>", "Queued while it works? Send now with one tap, or @5! to skip the queue.");
+  type("@5 先别动 CI 配置", 60, () => {
+    term("p4", ["<span class='o'>●</span> Update(api/time.py)", "<span class='o'>✻</span> Running… <span class='d'>(18s)</span>", "<span class='b'>❯ 先别动 CI 配置</span>", "  <span class='d'>ctrl+x ctrl+s to send now</span>", box()]);
+    setCard(live, live5(18, ["思考　8秒", "修改　api/time.py　4秒", "运行命令　pytest -q　· 进行中"], { els: [
+      { q: [["你 · 飞书", "blue", "先别动 CI 配置", [["排队中", "orange"]]]] },
+      { note: "排队中的话要等它这一步做完才会看到 · 点「立即发送」马上插进去" }, { hr: 1 },
+      { flow: ["思考　8秒", "修改　api/time.py　4秒", "运行命令　pytest -q　· 进行中"] },
+      { acts: [["立即发送", "primary", "bNow"], ["停止", "danger"], ["刷新", ""]], more: 1 }] }));
+  });
 });
-at(23.6, () => {
-  caption("多选题？<em>勾上，提交</em>", "Multi-select questions → checkboxes.");
-  term("p2", ["<span class='o'>●</span> 审稿人提了 4 条，你同意改哪几条？", "<span class='b'>❯ 1. [ ] 补消融实验</span>", "  2. [ ] 换 Fig.3 的配色", "  3. [ ] 精简 4.2 节", "  4. [ ] 加上限讨论", "  Submit"]);
-  window.multi = botCard(multiCard([]));
+at(25.6, () => tap("bNow"));
+at(26.1, () => {
+  term("p4", ["<span class='b'>❯ 先别动 CI 配置</span>", "<span class='o'>●</span> 好，CI 配置不动，只改代码。", "<span class='o'>●</span> Bash(pytest -q)", "  <span class='g'>⎿ 42 passed</span>", box()]);
+  flash("p4");
+  setCard(live, live5(21, ["修改　api/time.py　4秒", "运行命令　pytest -q　2秒"], { els: [
+    { q: [["你 · 飞书", "blue", "先别动 CI 配置", [["插话", ""]]]] }, { hr: 1 },
+    { flow: ["修改　api/time.py　4秒", "运行命令　pytest -q　2秒"] },
+    { acts: [["停止", "danger"], ["刷新", ""], ["看屏幕", ""]], more: 1 }] }));
 });
-function multiCard(on) {
-  const o = ["补消融实验", "换 Fig.3 的配色", "精简 4.2 节", "加上限讨论"];
-  return { title: "❓ 2号【paper】在问你", color: "orange", els: [{ md: "**审稿人提了 4 条，你同意改哪几条？**（多选）" },
-    { acts: o.map((t, i) => [`${on.includes(i + 1) ? "☑" : "☐"} ${i + 1}. ${t}`, on.includes(i + 1) ? "primary" : "", "o" + (i + 1)])
-      .concat([[on.length ? `✅ 提交（选了 ${on.length} 项）` : "一个都不选，提交", on.length ? "primary" : "", "sub"]]), bi: 1 }] };
-}
-at(25.0, () => tap("o1"));
-at(25.4, () => setCard(multi, multiCard([1])));
-at(26.0, () => tap("o3"));
-at(26.4, () => setCard(multi, multiCard([1, 3])));
-at(27.2, () => tap("sub"));
-at(27.7, () => {
-  setCard(multi, { title: "⏳ 2号【paper】正在思考 · 1秒", color: "wathet", els: [{ md: "<font color='grey'>你 → 【paper】：我选：1. 补消融实验；3. 精简 4.2 节。没选的不做。</font>" },
-    { hr: 1 }, { md: "⏳ **正在思考…**　已 1秒" }, { acts: [["⏹ 停止", "danger"], ["看屏幕", ""]] }] });
-  term("p2", ["<span class='b'>❯ 我选：1. 补消融实验；3. 精简 4.2 节。没选的不做。</span>", "<span class='o'>●</span> 好，先补消融，再精简 4.2。", "<span class='o'>✻</span> Thinking… <span class='d'>(1s)</span>", box()]);
+at(27.4, () => {
+  setCard(live, { title: "5号 tester · 汇报", kind: CC, sub: "跑通 repo-x 的测试　　~/proj/repo-x", color: "orange", els: [
+    { q: [["你 · 飞书", "blue", "先别动 CI 配置", [["插话", ""]]]] }, { hr: 1 },
+    { md: "**测试全部通过（42 passed）。**\n3 个失败都是时间没带时区，改了 api/time.py 4 行，CI 配置没动。" },
+    { acts: [["回复它", "primary"], ["看全文", ""]], more: 1 }], foot: ["用时 41秒 · 6 步", OPUS, "上下文 14%"] });
+});
+at(29.2, () => {
+  caption("选项带预览，<em>手机上也能比</em>", "Options come with previews, taken from the session log.");
+  term("p2", ["<span class='o'>●</span> 图 3 怎么排？", "<span class='b'>❯ 1. 左右并排</span>", "  2. 上下叠放", "  3. 只留结果图"]);
+  window.pick = botCard({ title: "2号 paper · 在问你", kind: CC, sub: "改论文第 4 节　　~/proj/paper", color: "orange", els: [
+    { md: "图 3 挪到附录前，先定个排法。" }, { hr: 1 },
+    { md: "**图 3 怎么排？**" },
+    { opts: [[1, "左右并排", "两张图一样大，横着放", "[ 方法 ]  [ 结果 ]"], [2, "上下叠放", "占一整栏，字更大", "[  方法  ]\n[  结果  ]"], [3, "只留结果图", "方法图删掉", "[  结果  ]"]] },
+    { pairs: [["1 左右并排", "", "p1b"], ["2 上下叠放", ""], ["3 只留结果图", ""]] },
+    { acts: [["回复它", ""], ["看屏幕", ""]] }], hint: "点按钮就是选它 · 都不合适就引用本卡片回复" });
+});
+at(31.2, () => tap("p1b"));
+at(31.7, () => {
+  setCard(pick, { title: "2号 paper · 正在执行 · 1秒", kind: CC, sub: "改论文第 4 节　　~/proj/paper", color: "wathet", live: 1, time: "08:19:02", els: [
+    { q: [["你 · 飞书", "blue", "选了「左右并排」"]] }, { hr: 1 }, { flow: ["修改　figures/fig3.tex　· 进行中"] },
+    { acts: [["停止", "danger"], ["刷新", ""], ["看屏幕", ""]], more: 1 }], foot: [OPUS, "上下文 40%"] });
+  term("p2", ["<span class='b'>❯ 1. 左右并排</span>", "<span class='o'>●</span> Update(figures/fig3.tex)", "<span class='o'>✻</span> Running… <span class='d'>(1s)</span>", box()]);
   flash("p2");
 });
-at(29.6, () => {
+at(33.2, () => {
   caption("下班：<em>对话留着，明天接着干</em>", "Clock out. The conversation is kept. Clock back in tomorrow.");
   type("@1 下班", 90);
 });
-at(31.0, () => {
+at(34.6, () => {
   term("p1", ["<span class='b'>❯ /exit</span>", "<span class='d'>Resume this session with: claude --resume …</span>", "", "<span class='d'>$</span>"]);
   panes.p1.querySelector(".tt b").textContent = "1号 exp-baseline（下班）";
   flash("p1");
-  botCard({ title: "🌙 1号【exp-baseline】下班了", color: "grey", els: [{ md: "对话记录留着。发「上班 1」就在原目录接着原来的对话干。" }] });
+  botCard({ title: "1号 exp-baseline · 下班了", kind: CC, sub: "跑基线　　~/proj/exp", color: "grey", els: [
+    { md: "对话都留着。上班后在原目录接着原来的对话干（也可以发「上班 1」）。" },
+    { acts: [["上班", "primary"], ["看板", ""]] }] });
 });
-at(33.0, () => {
+at(36.4, () => {
   caption("夜里不吵：<em>只推要你拍板的</em>，其余攒着", "Quiet hours: only decisions wake you up.");
   setCard(bid, board(["🌙 夜间免打扰（1:00–9:00）：只推要你拍板的，其余攒了 6 条",
-                      "🟢 干活中　2号 **paper** · 补消融实验", "🟢 干活中　3号 **refactor** · 先补测试",
-                      "🟢 干活中　5号 **tester** · 修 CI", "🌙 下班了：exp-baseline"], [{ acts: [["🌙 看攒下的 6 条", ""]] }]));
+                      "🟢 干活中　2号 CC **paper** · 排图 3", "🟢 干活中　3号 Codex **cx-refactor** · 先补测试",
+                      "🟢 干活中　5号 CC **tester** · 修 CI", "🌙 下班了：1号 CC exp-baseline"], [{ acts: [["看攒下的 6 条", ""]] }]));
   scrollTo = -(document.getElementById(bid).offsetTop - 6);
 });
-at(35.6, () => { document.getElementById("end").style.display = "flex"; });
+at(39.2, () => { document.getElementById("end").style.display = "flex"; });
 
 // 跑起来：每一帧由外面推进时钟（录屏用），或者直接看（打开网页实时播放）
 const inner = document.getElementById("inner"), feed = document.getElementById("feed"), phone = document.getElementById("phone");
@@ -287,7 +376,7 @@ const tapEl = document.getElementById("tap"), typing = document.getElementById("
 const capzh = document.getElementById("capzh"), capen = document.getElementById("capen");
 requestAnimationFrame(tickScroll);
 for (const [ms, f] of T) setTimeout(f, ms);
-window.DURATION = 38.5;
+window.DURATION = 42.0;
 </script>
 </body>
 </html>

@@ -31,7 +31,8 @@ KEYS = {
     "enter": "\r", "escape": "\x1b", "esc": "\x1b", "tab": "\t", "btab": "\x1b[Z",
     "up": "\x1b[A", "down": "\x1b[B", "right": "\x1b[C", "left": "\x1b[D",
     "c-c": "\x03", "space": " ", "bspace": "\x7f", "c-end": "\x1b[1;5F", "end": "\x1b[F", "home": "\x1b[H",
-    "c-d": "\x04", "c-l": "\x0c", "c-u": "\x15", "pageup": "\x1b[5~", "pagedown": "\x1b[6~", "delete": "\x1b[3~",
+    "pageup": "\x1b[5~", "pagedown": "\x1b[6~", "delete": "\x1b[3~",
+    **{f"c-{c}": chr(ord(c) - 96) for c in "abcdefghijklmnopqrstuvwxyz"},     # ctrl+字母（c-x c-s：Claude Code 的「立即发送」）
 }
 
 

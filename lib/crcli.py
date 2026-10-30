@@ -7,6 +7,8 @@
   cr 通知 [N]   最近 N 条通知
   cr 授权       把最近一个给机器人发过消息的飞书账号设为唯一允许的人
   cr autostart on|off   开机（登录）自动启动机器人
+  cr json       所有员工（Claude / Codex）的统一快照，JSON；给飞书以外的客户端用，见 lib/cragents.py
+  cr codex-hooks  给每套 codex 装上 PermissionRequest hook（可选：批准卡片上显示完整命令）
   cr daemon     前台运行机器人（调试用）
 
 配置在 <安装目录>/config.env（KEY=VALUE，一行一个），启动时读进环境变量；已经在环境里的不覆盖。
@@ -361,10 +363,18 @@ def main(argv=None):
         print(notices(int(argv[1]) if len(argv) > 1 and argv[1].isdigit() else 10))
     elif cmd == "授权":
         print(authorize())
+    elif cmd == "json":
+        import cragents
+        print(json.dumps(cragents.snapshot(crcore.Remote()), ensure_ascii=False, indent=1, default=str))
+    elif cmd == "codex-hooks":
+        import crcodex
+        print("\n".join(crcodex.install_hooks()))
     elif cmd.startswith("#fire"):
         print("开除只能由你在飞书里点确认按钮，命令行不能执行。")
         return 1
     else:
+        # 替谁往员工终端里打字：命令行是 cli（App 设 CR_VIA=app），在哪个员工的终端里跑的（秘书派活）记在 by
+        crcore.VIA.update(via=os.environ.get("CR_VIA") or "cli", by=crcore.caller_name())
         print(crcore.Remote().handle(" ".join(argv)))
     return 0
 

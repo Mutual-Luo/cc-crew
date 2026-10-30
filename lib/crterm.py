@@ -148,6 +148,8 @@ def start_tmux(name, cwd, argv, env):
         cmds = tmux(PRIVATE_SOCK, "list-panes", "-s", "-t", f"={name}", "-F", "#{pane_current_command}").split()
         if "claude" in cmds or "ccm" in cmds:
             return False, f"tmux 会话 {name} 里的 claude 还在运行"
+        if "codex" in cmds or "node" in cmds:            # npm 装的 codex 在 tmux 里显示成 node
+            return False, f"tmux 会话 {name} 里的 codex 还在运行"
         tmux(PRIVATE_SOCK, "kill-session", "-t", f"={name}")
     r = subprocess.run(["tmux", "-S", PRIVATE_SOCK, "new-session", "-d", "-s", name, "-c", cwd, "-x", "220", "-y", "50"]
                        + argv, capture_output=True, text=True, env=env, timeout=20)

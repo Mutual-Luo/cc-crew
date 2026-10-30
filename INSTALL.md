@@ -81,6 +81,20 @@ After that, the bot only obeys that one Feishu account. Within a minute a group 
 - To start a session the bot can control, use `ccm` instead of `claude` (same arguments). On Linux and macOS, running `claude` inside tmux also works.
 - In the Feishu group:
   - Typing talks to the secretary (助手).
-  - `@3 内容` talks to employee #3.
+  - `@3 内容` talks to employee #3. `@3! 内容` delivers it right away even while #3 is busy (otherwise it waits until the current step is done).
   - Buttons on cards answer questions and approve permissions.
 - `bin/cr status` shows whether the bot is running.
+
+## 8. Optional: Codex workers
+
+Only if the user also uses the [Codex CLI](https://github.com/openai/codex) and wants those sessions on the board. Ask first.
+
+- Codex sessions must run interactively in tmux. cc-crew never uses `codex exec` or the app-server.
+- If the user has more than one Codex install (different `CODEX_HOME`s, each with its own env script), add one line to `config.env`:
+  ```
+  CLAUDE_MONITOR_CODEX_HOMES=label1|/path/to/codex-home-1|/path/to/env1.sh;label2|/path/to/codex-home-2|/path/to/env2.sh
+  ```
+  With a single default install (`~/.codex`) nothing is needed.
+- In each install's `config.toml`, set `[tui] terminal_title = ["thread-id", "spinner", "thread-name", "project"]` so the bot can map tmux panes to sessions.
+- Optionally run `bin/cr codex-hooks`, which adds a record-only PermissionRequest hook. Then tell the user to type `/hooks` in Codex once to trust it.
+- Restart the bot with `bin/cr start`. New Codex workers are hired with `cr 新建 名字 目录 codex`.
