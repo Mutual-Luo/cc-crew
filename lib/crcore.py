@@ -51,7 +51,8 @@ ALIASES = f"{DATA}/aliases.json"                # claude 进程 pid -> 你给它
 HELD = f"{DATA}/held.jsonl"                     # 夜里你没在用时攒下、没推送的卡片（点看板上的〔🌙 看攒下的〕再发）
 SENT = f"{DATA}/sent.jsonl"                     # 机器人替人打进员工终端的话：对不上这里的，就是你在电脑上亲手打的
 HEARD = f"{DATA}/heard.jsonl"                   # 员工听到的每一句话（谁说的、从哪来的），守护进程边看对话记录边记，给卡片和手机 App 用
-VIA = {"via": "feishu", "by": ""}               # 这个进程替谁打字：守护进程是飞书；命令行 cr 是 cli（by＝在哪个员工的终端里跑的），见 crcli
+VIA = {"via": "", "by": ""}                     # 这个进程替谁打字：守护进程设成飞书（crbot）；命令行 cr 是 cli（by＝在哪个员工的终端里跑的，见 crcli）；
+                                                 # 没设的（员工自己写的脚本直接调这里）也算 cli，by 现查
 SETTINGS = f"{CLAUDE_DIR}/settings.json"
 LAUNCH = os.environ.get("CLAUDE_MONITOR_LAUNCH_SCRIPT", "")   # 自己的安全启动脚本（参数：会话名 目录 claude参数…）；不设就用内置的
 ASSISTANT_PROMPT = f"{ROOT}/assistant-prompt.md"
@@ -745,7 +746,7 @@ BACKGROUND_ORIGINS = ("task_notification", "scheduled", "auto_continuation", "pe
 SUBSTANTIAL_CHARS = 200     # 后台醒来写了这么多字（不算空白）才单独发卡片，否则只更新〔后台进度〕
 ASK_RE = re.compile(r"(?<!不)需要你(?!们)|你(来)?(定|决定|选|判断)一下|你(觉得|看)(哪个|选哪|怎么样)"
                     r"|要不要|确定吗|可以吗|行吗|好吗|选哪个|哪个更|你选哪|选哪(个|种)|哪(个|种)更"
-                    r"|要我[^。！!\n]{0,40}[吗么]"                     # 「要我直接帮你改成上面的参数吗？改完你需要……」
+                    r"|要我[^。！!\n]{0,40}(?:吗|(?<![什怎那这多])么)"   # 「要我直接帮你改成上面的参数吗？改完你需要……」；「什么」「怎么」不算
                     r"|等你(的)?(决定|确认|拍板|一句|回复|回话|定|点头)"
                     r"|你(同意|确认|点头|拍板|说可以)[了后]?.{0,8}我(再|就)"   # 「你确认后我再动手」
                     r"|(贴给|发给|告诉)我(?!们)"                         # 「你把日志贴给我」「告诉我身高、体重」
@@ -753,7 +754,7 @@ ASK_RE = re.compile(r"(?<!不)需要你(?!们)|你(来)?(定|决定|选|判断)�
                     r"|(两|三|四|几)(个|种)(方向|方案|选择|选项|办法).{0,6}(选|挑)"
                     r"|(?i:\bwhich (one|option)\b|\blet me know\b|\bdo you want\b|\bwould you like\b|\byour call\b"
                     r"|\bshall I\b|\bshould I\b|\bwant me to\b)")
-YESNO_RE = re.compile(r"要我[^。！!\n]{0,40}[吗么]|要不要|可以吗|行吗|好吗|确定吗|同意吗|你(同意|确认|点头)[了后]?.{0,8}我(再|就)"
+YESNO_RE = re.compile(r"要我[^。！!\n]{0,40}(?:吗|(?<![什怎那这多])么)|要不要|可以吗|行吗|好吗|确定吗|同意吗|你(同意|确认|点头)[了后]?.{0,8}我(再|就)"
                       r"|(?i:\bshall I\b|\bshould I\b|\bwant me to\b|\bok to\b)")
 INFO_RE = re.compile(r"(贴给|发给|告诉|提供给?)我(?!们)|(?<!不)需要你(提供|给|发|贴|上传|自己|手动|亲自)|你(自己|手动)(重启|操作|运行|执行|去)|(?i:\bsend me\b|\bpaste\b|\bshare (the|your)\b)")   # 要你给它东西：日志、截图、数字
 OFFER_RE = re.compile(r"需要的话[，,]?\s*我(可以|就|来)|要的话[，,]?\s*我(就|可以|来)|如果你(需要|想要|愿意|想)[^。\n]{0,20}我(可以|就)"
@@ -2018,7 +2019,9 @@ def screen_state(s, rows):
 def note_sent(s, text, files=0):
     """机器人替人往员工终端里打了一句话：记进 sent.jsonl（只留 3 天）。对话记录里分不出输入框里的字是谁打的，
     对得上这里的是飞书 / cr 发的，对不上的就是你在电脑上亲手打的（见 label_said）。"""
-    rec = {"t": now(), "sid": s.get("sessionId") or "", "pid": s.get("pid"), "text": text, "files": files, **VIA}
+    via = VIA["via"] or os.environ.get("CR_VIA") or "cli"
+    by = VIA["by"] if VIA["via"] else caller_name()
+    rec = {"t": now(), "sid": s.get("sessionId") or "", "pid": s.get("pid"), "text": text, "files": files, "via": via, "by": by}
     try:
         if os.path.exists(SENT) and os.path.getsize(SENT) > 1 << 20:
             with open(SENT, encoding="utf-8") as f:
@@ -2267,6 +2270,7 @@ class Card:
         self.pending_for = None      # 这是“思考中”卡片：回复到了就原地替换
         self.reply_for = None        # 这是某个会话的回复：替换它的“思考中”卡片
         self.in_place = False        # 点按钮得到的结果：直接替换被点的那张卡片
+        self.close_old = None        # 上一张实时卡片其实已经答完：它原地换成这张回复（不撤回）
         self.more = []               # 正文太长时，接着发的「续」卡片
         self.slot = None             # 固定的一张卡片（〔📋 员工看板〕）：原地更新，被刷上去了才挪到最下面
         self.minor = False           # 固定卡片只是状态变了（谁开始干活了）：只原地改，不挪位置
@@ -2956,11 +2960,11 @@ class Remote:
                 self.state.pop("attach", None)
                 if not body:
                     self.state.setdefault("asked_note", {})[name] = [sent_at, f"（发了 {len(files)} 个图片 / 文件）"]
-        self.state["remote_pending"][name] = sent_at
+        close = self.pend_since(name, sent_at, s)
         self.state.setdefault("typed_at", {})[name] = sent_at   # 机器人替人打的字：不算你在电脑前
         self.save()
         card = self.live_card(name, s, sent_at)
-        card.pending_for = name
+        card.pending_for, card.close_old = name, close
         return card
 
     # ------------------------------------------------------------ 斜杠命令：像在电脑上打「/」
@@ -3012,7 +3016,7 @@ class Remote:
                 skipped.append(name)
                 continue
             send_text(e, body)
-            self.state["remote_pending"][name] = now()
+            self.pend_since(name, now())
             sent.append(name)
         self.save()
         who = lambda names: "、".join(label_name(n) for n in names)
@@ -3396,11 +3400,11 @@ class Remote:
             return card
         crterm.key(s, "Enter")
         since = now()
-        self.state["remote_pending"][name] = since
+        close = self.pend_since(name, since, s)
         self.state.setdefault("typed_at", {})[name] = since
         self.save()
         card = self.live_card(name, s, since)
-        card.pending_for, card.in_place = name, True
+        card.pending_for, card.in_place, card.close_old = name, True, close
         return card
 
     def ask_card(self, name, s, qi=0, pt=None, note=""):
@@ -3685,11 +3689,11 @@ class Remote:
     def _picked_live(self, name, s, picked):
         """选完了：接着像发消息一样，这张卡片变成实时进度，做完变成回复。"""
         since = now()
-        self.state["remote_pending"][name] = since
+        close = self.pend_since(name, since, s)
         self.state.setdefault("asked_note", {})[name] = [since, picked]
         self.save()
         card = self.live_card(name, s, since)
-        card.pending_for, card.in_place = name, True
+        card.pending_for, card.in_place, card.close_old = name, True, close
         return card
 
     def answer_with_text(self, name, s, text):
@@ -3822,15 +3826,40 @@ class Remote:
                 lines.append(f"💬 {one_line(text, 160)}")
         return lines
 
+    def pend_since(self, name, t, s=None):
+        """从 t 起等它回话（飞书那张实时卡片从这里算起）。上一句还没回完你又说了一句：新卡片接着从上一句算起——
+        连发的几句都列出来、已有的进度接着显示，旧卡片撤回也什么都不丢（跑着的 /compact 这类也并进来）。
+        上一句其实已经答完、只是卡片还没来得及换成回复：返回那张回复，旧卡片原地换上，新卡片只管这一句。"""
+        old, start, close = self.state["remote_pending"].get(name), t, None
+        if name in load_json(PENDING, {}):
+            slash = self.state.get("slash", {}).pop(name, None)
+            if old and s and s["status"] != "busy" and not s.get("waiting") and old <= s["statusAt"] + 1 \
+                    and any(turn_steps(s.get("sessionId"), old)):
+                close = self.reply_card(name, s, old)
+                self.state.setdefault("mon", {}).setdefault("sent", {})[f"idle:{s.get('sessionId')}:{s['statusAt']}"] = now()
+            elif old:
+                start = min(self.pend_start(name, old), t)
+            elif slash:
+                start = min(slash[0], t)
+        self.state["remote_pending"][name] = t
+        self.state.setdefault("pending_from", {})[name] = [start, t]
+        return close
+
+    def pend_start(self, name, since):
+        """这张实时卡片从哪句算起：连发了几句是第一句的时间，不然就是 since（最近这句）。"""
+        start, latest = self.state.get("pending_from", {}).get(name) or (since, since)
+        return start if latest == since else since
+
     def live_card(self, name, s, since):
         """实时卡片，从上到下：说给它的话（引用块）→ 过程（浅灰时间线，最近 3 步）→ 它最新写的那段 → 按钮；
-        干了多久在标题里，模型、上下文、额度、生成了多少在底栏标签里。"""
+        干了多久在标题里，模型、上下文、额度、生成了多少在底栏标签里。连发了几句：从第一句算起（见 pend_since）。"""
+        since = self.pend_start(name, since)
         _, steps, _ = turn_steps(s.get("sessionId"), since)
         said = said_between(s.get("sessionId"), since, extra=[t for k, t, _ in steps if k == "said"])
         steps = [x for x in steps if x[0] != "said"]
         note = self.state.get("asked_note", {}).get(name)
-        if note and note[0] == since and not any(x.get("src") == "feishu" for x in said):   # 你是点选项 / 打字回答它的问题
-            said = [{"t": since, "kind": "human", "src": "feishu", "text": note[1]}] + said
+        if note and note[0] >= since and not any(x.get("src") == "feishu" and x["t"] >= note[0] - 2 for x in said):
+            said = sorted(said + [{"t": note[0], "kind": "human", "src": "feishu", "text": note[1]}], key=lambda x: x["t"])   # 你是点选项 / 打字回答它的问题
         rows = pane_rows(s)
         st = session_status(s)
         spin, effort = spinner_info(rows), st["effort"]
@@ -3870,7 +3899,9 @@ class Remote:
 
     def reply_card(self, name, s, since):
         """做完了：原地换成回复。从上到下：说给它的话（引用块，飞书发的不重复）→ 分隔 → 回答（主体）→ 按钮；
-        用时、做了几步在底栏标签里，〔看过程〕收在「···」里。"""
+        用时、做了几步在底栏标签里，〔看过程〕收在「···」里。连发了几句：从第一句算起，几句都列出来（飞书发的也列：
+        回复常常发在最底下、实时卡片撤回，不列就看不出它答的是哪几句）。"""
+        since = self.pend_start(name, since)
         _, steps, stopped = turn_steps(s.get("sessionId"), since)
         said = said_between(s.get("sessionId"), since, extra=[t for k, t, _ in steps if k == "said"])
         bar = session_status(s)
@@ -3898,7 +3929,7 @@ class Remote:
         sub = f"当前对话：{first_user_text(s.get('sessionId')) or name}" if is_assistant(name) else None
         chunks = rich(body)
         files = mentioned_files(body, s.get("cwd"))
-        quote, _ = said_els(said)
+        quote, _ = said_els(said, feishu=True)
         els = (quote + ([{"tag": "hr"}] if quote else []) + chunks[0]
                + ([{"tag": "action", "actions": file_buttons(files)}] if files else []) + options + [_actions(main, more)])
         tags = usage_tags(bar, extra=[(f"跑了 {took}" if stopped else f"用时 {took}") + (f" · {tools} 步" if tools else "")])
@@ -4166,8 +4197,9 @@ class Remote:
         for key in ("default", "current"):
             if self.state.get(key) == name:
                 self.state[key] = new
-        if name in self.state["remote_pending"]:
-            self.state["remote_pending"][new] = self.state["remote_pending"].pop(name)
+        for key in ("remote_pending", "pending_from"):
+            if name in self.state.get(key, {}):
+                self.state[key][new] = self.state[key].pop(name)
         pend = load_json(PENDING, {})
         if name in pend:
             pend[new] = pend.pop(name)
@@ -4831,7 +4863,7 @@ class Remote:
         typed = next((x for x in said if x["src"] == "terminal" and x["kind"] == "human" and now() - x["t"] < 60), None)
         if typed and name not in self.state["remote_pending"] and (
                 e.get("status") == "busy" or e.get("statusAt", 0) < typed["t"]):   # 刚打的字，状态还没来得及变成 busy 也算
-            self.state["remote_pending"][name] = typed["t"]
+            self.pend_since(name, typed["t"])
             card = self.live_card(name, e, typed["t"])
             card.pending_for = name                      # 守护进程发出去后登记成实时卡片，跟飞书发起的一样刷新
             notify(card, "live")

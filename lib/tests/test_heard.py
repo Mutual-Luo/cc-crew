@@ -169,8 +169,9 @@ check("实时卡片：说给它的话放在消息块里，来源是小标签，�
 check("实时卡片：「···」里能看过程（全文）", f"#steps {NAME} {T0}" in body)
 reply = r.reply_card(NAME, E, T0 + 40)
 body = json.dumps(reply.card, ensure_ascii=False)
-check("回复卡片：最上面是这期间别处来的话（助手转的、你在终端里打的斜杠命令），飞书发的不重复", ">助手</text_tag>" in body
-      and "/effort" in body and ">你 · 终端</text_tag>" in body and "第一行" not in body.split("做完了")[0], body[:600])
+check("回复卡片：最上面是这期间说给它的话（助手转的、终端里打的斜杠命令、飞书发的也列：实时卡片撤回后看得出答的是哪几句）",
+      ">助手</text_tag>" in body and "/effort" in body and ">你 · 终端</text_tag>" in body and "第一行" in body.split("做完了")[0],
+      body[:600])
 turn = crcore.last_turn(SID)
 check("最后一轮：从你在终端里打的那段开始", turn["t"] == T0 + 80 and [x["src"] for x in turn["said"]] == ["terminal"], turn)
 stop = r.stop_card(NAME, E, turn)
@@ -343,5 +344,87 @@ crcore.pane_rows = lambda s: QUEUED
 live = json.dumps(crcore.Remote().live_card(NAME, dict(E, status="busy"), T0).card, ensure_ascii=False)
 crcore.pane_rows = real_pane
 check("实时卡片：排着队的话标「排队中」，给〔立即发送〕", "排队中" in live and f"#sendnow {NAME}" in live, live[-800:])
+
+# 12. 上一句还没等到回复又发了一句：旧的实时卡片撤回，新卡片从第一句算起——连发的几句都列出来、进度接着显示，什么都不丢
+SID3, N3, T1 = "33333333-2222-3333-4444-555555555555", "demo-test", int(time.time()) - 300
+with open(os.path.join(proj, f"{SID3}.jsonl"), "w", encoding="utf-8") as f:
+    f.write("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in [
+        user(T1 + 1, "帮我看看这个报错？还有", **HUMAN),
+        assistant(T1 + 2, {"type": "tool_use", "id": "g1", "name": "Bash", "input": {"command": "grep -r claude", "description": "搜一下 claude"}}),
+        user(T1 + 5, [{"type": "tool_result", "tool_use_id": "g1", "content": "ok"}]),
+        queued(T1 + 61, [{"type": "text", "text": "截图里的按钮太大了 [Image #1]"}], {"kind": "human"}, imagePasteIds=[1]),
+        assistant(T1 + 70, {"type": "text", "text": "好，按钮也改小了。"})]))
+for t, text, files in ((T1 + 0.5, "帮我看看这个报错？还有", 0), (T1 + 60.5, "截图里的按钮太大了", 1)):
+    real, crcore.now = crcore.now, lambda t=t: t
+    crcore.note_sent({"sessionId": SID3}, text, files)
+    crcore.now = real
+E3 = dict(E, sessionId=SID3, pid=998)
+crcore.save_json(crcore.REGISTRY, {N3: E3})
+busy, idle = dict(E3, status="busy", statusAt=T1), dict(E3, status="idle", statusAt=T1 + 71)
+r = crcore.Remote()
+r.state["remote_pending"] = {N3: T1}
+crcore.save_json(crcore.PENDING, {N3: "old-card"})
+close = r.pend_since(N3, T1 + 60, busy)
+check("连发：记下第一句的时间，最近这句照常用来判断答没答完", close is None and r.state["remote_pending"][N3] == T1 + 60
+      and r.state["pending_from"][N3] == [T1, T1 + 60], r.state.get("pending_from"))
+live = r.live_card(N3, busy, T1 + 60)
+body = json.dumps(live.card, ensure_ascii=False)
+quote = json.dumps([el for el in live.card["elements"] if el["tag"] == "column_set"], ensure_ascii=False)
+check("连发：新卡片列出两句（同一来源一块，第二句前面一个淡「·」，标插话、带图），进度从第一句接着显示",
+      "帮我看看这个报错？还有" in quote and "<font color='grey'>·</font>" in quote and "插话" in quote and "1 张图" in quote
+      and "搜一下 claude" in body and f"#steps {N3} {T1}" in body, body[:900])
+reply = json.dumps(r.reply_card(N3, idle, T1 + 60).card, ensure_ascii=False)
+check("连发：回复卡片也列出两句，答的是最后的话", "帮我看看这个报错" in reply and "截图里的按钮" in reply and "按钮也改小了" in reply, reply[:600])
+r = crcore.Remote()
+r.state["remote_pending"] = {N3: T1}
+close = r.pend_since(N3, T1 + 100, idle)
+check("上一句其实已经答完、卡片还没换：旧卡片换成那张回复，新卡片只管这一句", close is not None and "按钮也改小了" in close.text
+      and r.state["pending_from"][N3] == [T1 + 100, T1 + 100], getattr(close, "text", None))
+r = crcore.Remote()
+r.state["remote_pending"] = {N3: T1}
+crcore.save_json(crcore.PENDING, {})
+r.pend_since(N3, T1 + 60, busy)
+check("没有在等的实时卡片（早就换成回复了）：不往前接", r.state["pending_from"][N3] == [T1 + 60, T1 + 60])
+check("从别处（旧版本）记的等待时间：不认 pending_from", r.pend_start(N3, T1 + 7) == T1 + 7)
+
+
+class FakeFeishu:
+    def __init__(self, ok=True):
+        self.log, self.after, self.ok = [], {"old-card": 3}, ok
+
+    def patch(self, mid, card):
+        self.log.append(("patch", mid))
+        return self.ok
+
+    def send(self, card):
+        self.log.append(("send",))
+        return "new"
+
+    def recall(self, mid):
+        self.log.append(("recall", mid))
+
+
+fb = FakeFeishu()
+crbot.Feishu.retire(fb, "old-card", live)
+check("旧实时卡片：内容都搬进新卡片了，撤回", fb.log == [("recall", "old-card")] and "old-card" not in fb.after, fb.log)
+live.close_old = close
+fb = FakeFeishu()
+crbot.Feishu.retire(fb, "old-card", live)
+check("旧卡片其实已经答完：原地换成回复，不撤回", fb.log == [("patch", "old-card")], fb.log)
+fb = FakeFeishu(ok=False)
+crbot.Feishu.retire(fb, "old-card", live)
+check("换不了（太久了之类）：回复照发，再撤回", fb.log == [("patch", "old-card"), ("send",), ("recall", "old-card")], fb.log)
+check("「…第 2 次是问这次测试叫什么。」是陈述，不是要你拍板（「什么」「怎么」里的「么」不算问句）",
+      not crcore.is_decision("睡醒了。这次测试叫“连发测试”，第 1 次是你要我回「睡醒了」，第 2 次是问这次测试叫什么。")
+      and crcore.ask_kind("要我现在重启么")[0] == "yesno" and crcore.ask_kind("要我直接帮你改成上面的参数吗？")[0] == "yesno")
+
+# 13. 不是守护进程（员工自己写脚本直接调 crcore 发话）：不能算「你 · 飞书」，记成 cli、写上是哪个员工
+real_caller, crcore.caller_name = crcore.caller_name, lambda: "crew-x"
+crcore.VIA.update(via="", by="")
+crcore.note_sent({"sessionId": SID3}, "脚本发的一句")
+crcore.caller_name = real_caller
+rec = crcore._sent_tail()[-1]
+check("脚本直接调 crcore 发的：记成 cli + 哪个员工发的", rec["via"] == "cli" and rec["by"] == "crew-x", rec)
+crcore.VIA.update(via="feishu", by="")
 
 print(f"\n全部通过：{len(passed)} 项")

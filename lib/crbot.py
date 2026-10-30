@@ -146,6 +146,17 @@ class Feishu:
         if not resp.success():                       # 撤回不了（比如太久了）：缩成一行，指到下面
             self.patch(mid, crcore.alert("📋 后台进度已挪到下面 ⬇️", "", "grey"))
 
+    def retire(self, old, card):
+        """上一句还没等到回复又说了一句：新卡片已经接着上一张显示（连发的几句、已有的进度都在），旧的撤回。
+        上一句其实已经答完、卡片还没来得及换的：旧卡片原地换成那张回复（换不了就发出来），不撤回。"""
+        self.after.pop(old, None)
+        close = getattr(card, "close_old", None)
+        if close and self.patch(old, close):
+            return
+        if close:
+            self.send(close)
+        self.recall(old)
+
     def claim(self, mid):
         """这条消息还没处理过就记下来并返回 True（飞书推送和补收同时碰到同一条时，只处理一次）。"""
         with self.seen_lock:
@@ -519,9 +530,8 @@ class Feishu:
                         pend[reply.pending_for] = mid
                         crcore.save_json(PENDING, pend)
                     self.after[mid] = 0
-                    if old and old != mid:            # 上一句还没等到回复又发了一句：旧的进度卡片撤回，进度和回复都在新卡片里
-                        self.after.pop(old, None)
-                        self.recall(old)
+                    if old and old != mid:            # 上一句还没等到回复又发了一句：旧的进度卡片撤回，几句话、进度和回复都在新卡片里
+                        self.retire(old, reply)
             except Exception as e:  # noqa: BLE001 —— 单条命令出错不影响守护进程
                 log.exception("处理命令出错")
                 try:
@@ -629,8 +639,7 @@ def monitor_loop(feishu):
                                 crcore.save_json(PENDING, pend)
                             feishu.after[mid] = 0
                             if old and old != mid:
-                                feishu.after.pop(old, None)
-                                feishu.recall(old)
+                                feishu.retire(old, msg)
                         continue
                     if item.get("merge"):
                         feishu.merge(msg)
@@ -662,6 +671,7 @@ def main():
     # 飞书是国内服务，直连（长连接本来就是直连的）；走 127.0.0.1:10000 代理经常超时，回复会丢。代理只留给 claude 用。
     for k in ("NO_PROXY", "no_proxy"):
         os.environ[k] = ",".join(x for x in (os.environ.get(k), ".feishu.cn", ".feishucdn.com", ".larksuite.com") if x)
+    crcore.VIA.update(via="feishu", by="")          # 守护进程替你打的字都是飞书来的（别的进程默认算 cli）
     env = {**read_env(), **{k: v for k, v in os.environ.items() if k.startswith("FEISHU_")}}   # cr 已经把 config.env 读进环境变量了
     app_id, secret, allow = env.get("FEISHU_APP_ID"), env.get("FEISHU_APP_SECRET"), env.get("FEISHU_ALLOW_OPEN_ID")
     feishu = Feishu(app_id, secret, allow, env.get("FEISHU_GROUP_NAME") or GROUP_NAME) if app_id and secret else None
