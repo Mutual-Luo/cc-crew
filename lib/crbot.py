@@ -588,7 +588,7 @@ def live_loop(feishu):
                         continue
                     body = json.dumps(card.card["elements"][:-1], ensure_ascii=False)   # 不比较底部时间
                     if time.time() - last_t < live_interval(time.time() - since) or (
-                            body == last_body and time.time() - last_t < 30):
+                            body == last_body and time.time() - last_t < 2 * LIVE_SECS):   # 内容没变（在等模型）也隔几秒刷一次：标题的秒数、底栏时间在走，看得出没卡
                         continue
                     if feishu.patch(mid, card):
                         shown[mid] = (time.time(), body)

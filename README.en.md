@@ -55,7 +55,7 @@ Tap 〔B〕 on #3's card, and the Claude Code session on the server carries on.
 
 **Between meetings.** #1 wants to install a package and an approval card arrives; tap 〔允许〕 (Allow). Tell the secretary "hire someone to get repo-x's tests passing". It opens #5 in tmux and assigns the work. #5's card shows, live, what its last few steps were and how long each took. To cut in while it's busy, send `@5! don't touch the CI config` instead of waiting for it to finish the current step.
 
-**Evening.** `@1 下班` (clock out): #1 exits cleanly and keeps its conversation. Tomorrow, `上班 1` (clock in) resumes it in the same directory. At night only decisions reach you; everything else waits for you on the board.
+**Evening.** `@1 下班` (clock out): #1 exits cleanly, gives its number back and keeps its conversation. Tomorrow, `上班 <name>` (clock in) resumes it in the same directory with the lowest free number. At night only decisions reach you; everything else waits for you on the board.
 
 ## Features
 

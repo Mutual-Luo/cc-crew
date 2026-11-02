@@ -357,6 +357,7 @@ def rich(text, size=CARD_CHARS):
 
 
 LINE_EM = 24        # 手机窄屏上卡片里一行大约放得下多少个汉字宽（灰底块、按钮行都按它算，宁可短一点也不折行）
+NOTE_EM = 27        # 灰色小字（note）字号小一号，一行多放几个字
 
 
 def text_em(text):
@@ -432,6 +433,18 @@ def strip_resume_args(args):
     return out
 
 
+def _shown_job(d, jobs, title):
+    """tmux 里这个前台眼下接着的是哪个后台任务。会话文件里的 parkedJobId 只记它最早挂上的那个，在前台里切到别的后台会话后
+    Claude Code 不改它，只有终端标题变成那个会话的名字——有名字对得上的后台任务就认它（同名的先认原来那个、再认同目录最近动过的）。"""
+    parked = jobs.get(d.get("parkedJobId"))
+    if not parked:
+        return None
+    named = [j for j in jobs.values() if title and re.sub(r"^\W+", "", j.get("name") or "").strip() == title]
+    if not named or parked in named:
+        return parked
+    return max(named, key=lambda j: (j.get("cwd") == d.get("cwd"), j.get("updatedAt") or 0))
+
+
 def discover():
     """返回 {显示名: 会话信息}：本机所有交互式 claude。
     在 tmux / ccm 里跑的能遥控；直接在终端里打 claude 开的只能看（term == "none"），见 crterm.py。"""
@@ -444,16 +457,16 @@ def discover():
         pid = d.get("pid")
         if not pid or not _proc_alive(pid):
             continue
-        job = jobs.get(d.get("parkedJobId"))
+        t = crterm.attach_info(pid, d)
+        if not t:
+            continue
+        title = re.sub(r"^\W+", "", t["title"]).strip()      # Claude Code 把对话标题写在终端标题里，前面是状态符号
+        job = _shown_job(d, jobs, title)
         if job:                                      # 对话被挪成了后台任务（Claude Code 的 parked 会话）：tmux 里这个只是它的前台，
             d = {**d, **{k: job[k] for k in ("sessionId", "status", "statusUpdatedAt", "waitingFor", "name") if k in job},
                  "jobPid": job.get("pid")}           # 真正干活的、写对话记录的是后台那个进程；打字、读屏照旧走 tmux 里这个
             if "waitingFor" not in job:
                 d.pop("waitingFor", None)
-        t = crterm.attach_info(pid, d)
-        if not t:
-            continue
-        title = re.sub(r"^\W+", "", t["title"]).strip()      # Claude Code 把对话标题写在终端标题里，前面是状态符号
         args = _proc_args(pid)[1:]
         found.append({
             "pid": pid, "agent": "claude", "sessionId": d.get("sessionId"), "cwd": d.get("cwd"),
@@ -744,22 +757,27 @@ def _claude_steps(path, since):
 
 BACKGROUND_ORIGINS = ("task_notification", "scheduled", "auto_continuation", "peer")   # 不是你叫醒的：后台任务、定时唤醒…
 SUBSTANTIAL_CHARS = 200     # 后台醒来写了这么多字（不算空白）才单独发卡片，否则只更新〔后台进度〕
+YN_MORE = r"(?:要(?:改|换|删|加|做|跑|用|发|推|合|装|动|试|上|停|关|重启)|就?按这个|改成|换成)[^。！!\n？?]{0,20}吗[？?]|你看(?:行不行|可不可以|好不好)|(?:方向|思路|方案|改法|写法)对吗[？?]|(?:等|需要)你(?:的)?(?:点头|同意|批准)(?:了|后|之后)?(?:我?再|才|我就)|你同意的话[，,]?\s*我|可以的话[，,]?\s*我(?:就|再|先)|(?i:\bneed your (?:approval|go-ahead|ok)\b)"   # 问做不做的别的说法：「要改吗？」「就按这个方案合吗？」「你看行不行」、等你点头 / 同意的
+TELL_ME = (r"(?:^|(?<=[。！？!?；;：:，,\n]))\s*(?:你|请|麻烦你?|可以|能)?\s*(?:直接|先|再|顺便)?\s*(?:把[^。！？!?\n]{0,30})?"
+           r"(?:贴给|发给|告诉|提供给?)我(?!们)")   # 叫你给它东西：「你把日志贴给我」「请告诉我路径」；「window 1 看到会告诉我」「用户告诉我」是陈述
 ASK_RE = re.compile(r"(?<!不)需要你(?!们)|你(来)?(定|决定|选|判断)一下|你(觉得|看)(哪个|选哪|怎么样)"
                     r"|要不要|确定吗|可以吗|行吗|好吗|选哪个|哪个更|你选哪|选哪(个|种)|哪(个|种)更"
                     r"|要我[^。！!\n]{0,40}(?:吗|(?<![什怎那这多])么)"   # 「要我直接帮你改成上面的参数吗？改完你需要……」；「什么」「怎么」不算
+                    r"|" + YN_MORE +                                     # 「要改吗？」「就按这个方案合吗？」「你看行不行」
                     r"|等你(的)?(决定|确认|拍板|一句|回复|回话|定|点头)"
                     r"|你(同意|确认|点头|拍板|说可以)[了后]?.{0,8}我(再|就)"   # 「你确认后我再动手」
-                    r"|(贴给|发给|告诉)我(?!们)"                         # 「你把日志贴给我」「告诉我身高、体重」
+                    r"|" + TELL_ME +                                    # 「你把日志贴给我」「告诉我身高、体重」
                     r"|你.{0,15}(觉得|看).{0,25}的话[，,]?\s*我(就|再)"
                     r"|(两|三|四|几)(个|种)(方向|方案|选择|选项|办法).{0,6}(选|挑)"
                     r"|(?i:\bwhich (one|option)\b|\blet me know\b|\bdo you want\b|\bwould you like\b|\byour call\b"
                     r"|\bshall I\b|\bshould I\b|\bwant me to\b)")
-YESNO_RE = re.compile(r"要我[^。！!\n]{0,40}(?:吗|(?<![什怎那这多])么)|要不要|可以吗|行吗|好吗|确定吗|同意吗|你(同意|确认|点头)[了后]?.{0,8}我(再|就)"
+YESNO_RE = re.compile(YN_MORE + r"|要我[^。！!\n]{0,40}(?:吗|(?<![什怎那这多])么)|要不要|可以吗|行吗|好吗|确定吗|同意吗|你(同意|确认|点头)[了后]?.{0,8}我(再|就)"
                       r"|(?i:\bshall I\b|\bshould I\b|\bwant me to\b|\bok to\b)")
-INFO_RE = re.compile(r"(贴给|发给|告诉|提供给?)我(?!们)|(?<!不)需要你(提供|给|发|贴|上传|自己|手动|亲自)|你(自己|手动)(重启|操作|运行|执行|去)|(?i:\bsend me\b|\bpaste\b|\bshare (the|your)\b)")   # 要你给它东西：日志、截图、数字
+INFO_RE = re.compile(TELL_ME + r"|(?<!不)需要你(提供|给|发|贴|上传|自己|手动|亲自)|你(自己|手动)(重启|操作|运行|执行|去)|(?i:\bsend me\b|\bpaste\b|\bshare (the|your)\b)")   # 要你给它东西：日志、截图、数字
 OFFER_RE = re.compile(r"需要的话[，,]?\s*我(可以|就|来)|要的话[，,]?\s*我(就|可以|来)|如果你(需要|想要|愿意|想)[^。\n]{0,20}我(可以|就)"
                       r"|(?i:\bif you('d)? like,? I can\b)")
-OPTION_LINE_RE = re.compile(r"^\s*(?:[-*•·]\s*)?(?:\*\*)?(?:方案|方向|选项)?\s*([A-F])\s*(?:\*\*)?\s*[.、．:：)）]\s*(?:\*\*)?\s*(.+)$")
+OPTION_LINE_RE = re.compile(r"^\s*(?:[-*•·]\s*)?(?:\*\*)?(?:方案|方向|选项)?\s*(?:[（(]\s*([A-Fa-f])\s*[)）]|([A-F])\s*(?:\*\*)?\s*[.、．:：)）])"
+                            r"\s*(?:\*\*)?\s*(.+)$")   # 「A. …」「**B**：…」「(c) …」
 
 
 def last_turn(session_id):
@@ -828,9 +846,46 @@ def turn_answer(texts):
     return texts[-1]
 
 
+def turn_answers(steps):
+    """since 之后不一定只有一轮：它忙的时候你又发了一句，排在后面、上一轮答完才轮到，就是两轮（它干活时插进去的话不算新的一轮）。
+    每轮各取它的回答（turn_answer），返回 [(这一轮问的话, 回答)]，没写话的轮不列。"""
+    turns = [([], [])]                                   # (这一轮问的话, 它写的话)
+    for k, t, _ in steps:
+        if k == "said" and not t.get("mid"):
+            if turns[-1][1]:
+                turns.append(([], []))
+            turns[-1][0].append(t)
+        elif k == "text":
+            turns[-1][1].append(t)
+    return [(qs, turn_answer(texts)) for qs, texts in turns if texts]
+
+
+def turn_label(qs):
+    """多轮回答里每轮上面那行灰字：答的是你哪句。后台任务的通知不是你问的话，不写成「答「Monitor …」」。"""
+    you = [q for q in qs if q.get("kind") != "background"]
+    if not you:
+        return "<font color='grey'>后台任务有结果后：</font>\n" if qs else ""
+    ask = one_line(you[0]["text"] or f"{you[0]['images']} 张图", 16) + ("…" if len(you) > 1 else "")
+    return f"<font color='grey'>答「{ask}」</font>\n"
+
+
+CLAUSE_END ="，,。；;！!？?\n"
+
+
+def not_to_you(text):
+    """去掉不是问你的说法，免得被当成在问你：引号里转述的话（「老板，要不要我们家…」）、它自己盘算的
+    「（等结果出来）再决定要不要改」（这一小句里没有「你」）、别人会问你的「它会问你要不要登录」。"""
+    text = re.sub(r"「[^」\n]*」|『[^』\n]*』|“[^”\n]*”", "「」", text or "")
+    def mine(m):
+        clause = re.split(f"[{CLAUSE_END}]", text[:m.start()])[-1]
+        return "是否" if "你" not in clause else m.group(0)
+    text = re.sub(r"(?<=决定)要不要|(?<=再看)要不要", mine, text)
+    return re.sub(r"((?:它|他|她|对方|会)[^{0}]{{0,12}}问你[：:，,]?\s*)要不要".format(CLAUSE_END), r"\1是否", text)
+
+
 def asks_you(text):
     """它最后这段话是不是在问你、等你拿主意（问句可能在中间：「要我改吗？改完你要重启一下」）。"""
-    tail = (text or "").strip()[-400:]
+    tail = not_to_you(text).strip()[-400:]
     last = [r for r in tail.splitlines() if r.strip()][-1:]
     return bool(ASK_RE.search(tail) or (last and re.search(r"[？?][\s*）)]*$", last[0])))
 
@@ -840,12 +895,13 @@ def ask_kind(text):
     ("open", []) 别的问题（要你提供东西、开放问题）；("offer", []) 只是提议「需要的话我可以…」；(None, []) 不是在问你。"""
     if asks_you(text):
         opts = decision_options(text)
-        ask = " ".join([r for r in (text or "").splitlines() if r.strip()][-2:])[-160:]
+        said = not_to_you(text)
+        ask = " ".join([r for r in said.splitlines() if r.strip()][-2:])[-160:]
         if opts and opts[0][0].isdigit() and YESNO_RE.search(ask) and not CHOICE_CUE_RE.search(ask):
             opts = []                                    # 「…1. 2. 3.…要我改吗？」：数字是说明，问的是做不做
         if opts:
             return "options", opts
-        if YESNO_RE.search(ask) or YESNO_RE.search((text or "")[-400:]) and not INFO_RE.search(ask):
+        if YESNO_RE.search(ask) or YESNO_RE.search(said[-400:]) and not INFO_RE.search(ask):
             return "yesno", []
         return ("info" if INFO_RE.search(ask) else "open"), []
     if OFFER_RE.search((text or "").strip()[-300:]):
@@ -853,7 +909,8 @@ def ask_kind(text):
     return None, []
 
 
-DECIDE_KINDS = ("options", "yesno", "open")   # 要你拍板的；「把日志贴给我」这类要你给东西的、「需要的话我可以…」都不算
+DECIDE_KINDS = ("options", "yesno")   # 要你拍板的：只有能出按钮的两类（选 A/B/C、做不做）——「需要我按按钮的再叫我，其他的就是正常的消息」。
+                                      # 开放问题、要你给东西（日志、路径）、「需要的话我可以…」都按普通消息发
 
 
 def is_decision(text):
@@ -872,20 +929,23 @@ def decision_options(text):
     def clean(t):
         t = re.sub(r"[*`“”\"]", "", t).strip()
         return re.split(r"[：:，,。；;（(]", t, 1)[0].strip() or t
-    opts = {}
+    opts, paren = {}, set()
     for row in (text or "").splitlines():
         m = OPTION_LINE_RE.match(row)
-        if m and m.group(1) not in opts:
-            opts[m.group(1)] = clean(m.group(2))
+        letter = m and (m.group(1) or m.group(2)).upper()
+        if m and letter not in opts:
+            opts[letter] = clean(m.group(3))
+            if m.group(1):
+                paren.add(letter)
     out = []
     for letter in "ABCDEF":
         if letter not in opts:
             break
         out.append((letter, opts[letter]))
-    if len(out) >= 2:
-        return out
     tail = (text or "")[-1500:]
     ask = " ".join([r for r in tail.splitlines() if r.strip()][-2:])[-160:]   # 只看最后的问话：「你选哪种？」「给你两个方向选」
+    if len(out) >= 2 and (CHOICE_CUE_RE.search(ask) or not paren >= {k for k, _ in out}):
+        return out                                       # 「(a) (b)」常是列几处改动、问你行不行：问的是选哪个才算选项
     if not CHOICE_CUE_RE.search(ask) and not re.search(r"给你[^。！？!?\n]{0,10}选", tail[-600:]):
         return []
     nums, rows = {}, {}
@@ -1947,6 +2007,8 @@ def slash_output(rows, word):
     if start is None:
         return ""
     out = [re.sub(r"^[⎿└]\s*", "", r).strip() for r in rows[start + 1:end]]
+    out = [re.sub(r"^Set model to (.+?)( for this session only)?$", lambda m: f"已切到 {m.group(1)}" + ("（只对这次对话）" if m.group(2) else ""),
+                  re.sub(r"^Kept model as (.+)$", r"没换，还是 \1", r)) for r in out]
     return "\n".join(r for r in out if r and not set(r) <= set("─━") and not re.search(r"Update installed|/restart to apply", r))
 
 
@@ -1965,25 +2027,31 @@ CHROME_RE = re.compile(r"^\s*(?:[─━—-]{3,}.*|❯\s*|›\s*|>\s*|\? for sho
                        r"|.*(?:Enter|Esc) to \w+.*|.*to navigate.*|.*Notes: press.*|.*to add notes.*|\s*\d*\.?\s*Chat about this.*"
                        r"|\s*\d*\.?\s*\[?\s*\]?\s*Type something.*|.*[Pp]ress up to edit.*|.*Tab to amend.*)$")
 DONE_RE = re.compile(r"^\s*\S\s+\w+ for \d.*·\s*done\b")    # 「✻ Crunched for 23s · done 3:34 PM」：上一轮结束的分隔
+THOUGHT_RE = re.compile(r"^(?:\S\s+)?Thought for \d[\dhms ]*$")   # 「Thought for 11s」：想了多久，屏幕卡片上是噪音
 
 
 def clean_screen(rows, lines=25):
     """屏幕去掉终端外壳，只留内容：分隔线、空输入框、权限模式那行、底部状态行（模型、上下文、额度在底栏标签里）、
     更新提示、小贴士、各种操作提示（Enter to select、Esc to cancel、Notes…）、排队提示、转圈那行（顶上的状态标签）都不要；
-    空行都去掉；每行截到手机一屏宽（不出横向滚动条），开头的缩进换成全角空格留着；「●」换成「•」（「● - 苹果」只留「- 苹果」），
-    原文的「- 」不动。"""
+    「Thought for 11s」也不要；空行都去掉；每行写全、在手机上自然折行（以前截成一屏宽，满屏「…」看不懂），
+    开头的缩进换成全角空格留着；「●」换成「•」（「● - 苹果」只留「- 苹果」），原文的「- 」不动；
+    你说的话（「❯ 」/ codex 的「› 」开头，菜单光标「❯ 1.」不算）写成「你：…」，前面空一行，一问一答分得开。"""
     out = []
     for r in rows:
         r = r.rstrip()
-        if not r.strip() or CHROME_RE.match(r) or DONE_RE.match(r) or SPINNER_RE.match(r.strip()) \
+        if not r.strip() or CHROME_RE.match(r) or DONE_RE.match(r) or SPINNER_RE.match(r.strip()) or THOUGHT_RE.match(r.strip()) \
                 or STATUS_RE.search(r) and re.search(r"ctx \d+%", r):
             continue
         r = re.sub(r"(?:[⛀-⛿]\s?)+", "", r)             # /context 的方格图手机上没用
         r = re.sub(r"^(\s*)●\s+(?=[-*]\s)", r"\1", r)
         r = re.sub(r"^(\s*)●\s", r"\1• ", r)
         r = re.sub(r"^(\s*)⎿\s*", r"\1└ ", r)
+        said = re.match(r"^[❯›]\s+(?!\d+\.\s)(.+)", r.strip())
+        if said:
+            out += ([""] if out else []) + ["你：" + said.group(1)]
+            continue
         indent = len(r) - len(r.lstrip())
-        out.append("　" * (indent // 2) + fit(r.strip(), LINE_EM - indent // 2 - 1))
+        out.append("　" * (indent // 2) + r.strip())
     return "\n".join(out[-lines:])
 
 
@@ -2319,11 +2387,12 @@ def _pill(text, level=0):
 
 
 def usage_tags(bar, model=True, extra=()):
-    """底栏的一排浅灰小标签。先是这一轮的（extra：用时、做了几步、生成了多少 token），再是模型、上下文、额度（5 小时 / 本周合成一个）；
+    """底栏的一排浅灰小标签。先是这一轮的（extra：用时、做了几步、生成了多少 token），再是模型、思考程度（「思考 中」）、上下文、额度（5 小时 / 本周合成一个）；
     上下文、额度快满了变橙、变红（不在文字里堆 ⚠️）。codex 的额度是它自己那个账号的；Claude 的取整个账号最新的那份。"""
     level = lambda pct, warn, high: 2 if pct >= high else 1 if pct >= warn else 0
     tags = [_pill(x) for x in extra if x]
     tags += [_pill(bar["model"])] if model and bar.get("model") else []
+    tags += [_pill(f"思考 {EFFORT_CN.get(bar['effort'], bar['effort'])}")] if model and bar.get("effort") else []
     if bar.get("ctx") is not None:
         tags.append(_pill(f"上下文 {bar['ctx']}%", level(bar["ctx"], 60, CTX_WARN)))
     quota = {k: bar[k] for k in ("5h", "7d", "30d") if bar.get(k) is not None} if bar.get("agent") == "codex" else latest_quota()
@@ -2352,6 +2421,52 @@ def badge(name):
     """「2号」；助手（秘书）和没分到工号的返回空。"""
     n = load_json(BADGES, {}).get(name)
     return f"{n}号" if n else ""
+
+
+BADGE_GRACE = 600    # 进程没了多久才收回工号：重启、断一下、一时没认出来都不算下班
+RENUM_SECS = 86400   # 工号重排后，旧号再认一天
+
+
+def sync_badges(reg):
+    """工号只给在上班的员工：下班就收回（「下班」关掉的马上收回，进程自己没了的过 BADGE_GRACE 秒）；
+    新来的、上班回来的取最小的空号；在班的人号码不动，不因为别人下班而挪。助手、资讯这类不占号。返回 {名字: 号}。"""
+    badges = load_json(BADGES, {})
+    staff = {n: e for n, e in reg.items() if not is_assistant(n) and not is_quiet(n)}
+    keep = {n: v for n, v in badges.items() if n in staff and (staff[n].get("alive") or now() - staff[n].get("died", 0) < BADGE_GRACE)}
+    for name in sorted((n for n, e in staff.items() if e.get("alive") and n not in keep and _proc_alive(e.get("pid"))),
+                       key=lambda n: (staff[n].get("startedAt") or 0, n)):
+        keep[name] = min(set(range(1, len(keep) + 2)) - set(keep.values()))
+    if keep != badges:
+        save_json(BADGES, keep)
+    return keep
+
+
+def renum_hint(k, name, at):
+    """用了重排前的旧号：「11号现在是6号（exp-a:1）」；它已经下班（没有工号了）就说用名字叫回。at：什么时候重排的。"""
+    until = time.strftime("%H:%M", time.localtime(at + RENUM_SECS))
+    return (f"ℹ️ {k}号现在是{badge(name)}（{name}）。工号重排过，旧号认到明天 {until}。" if badge(name) else
+            f"ℹ️ 原来的 {k}号 {name} 下班了，已经没有工号；叫回用名字：「上班 {name}」。")
+
+
+def release_badge(name):
+    """「下班」关掉了：工号马上收回。"""
+    badges = load_json(BADGES, {})
+    if badges.pop(name, None) is not None:
+        save_json(BADGES, badges)
+
+
+def renumber_badges(state, order, reg):
+    """整理工号：在班的按 order 排成连续的 1～N（order 里没写到的在班员工按原来的号接在后面），助手不占号。
+    旧号记在 state["renum"]（{旧号: 名字}，只记换了人的），再认 RENUM_SECS 秒。返回 (旧, 新)。"""
+    old = load_json(BADGES, {})
+    on = [n for n in order if n in reg and reg[n].get("alive") and not is_assistant(n) and not is_quiet(n)]
+    on += sorted((n for n, e in reg.items() if e.get("alive") and n not in on and not is_assistant(n) and not is_quiet(n)),
+                 key=lambda n: (old.get(n) or 999, n))
+    new = {n: i for i, n in enumerate(on, 1)}
+    save_json(BADGES, new)
+    holder = {v: k for k, v in new.items()}
+    state["renum"] = {"t": now(), "old": {str(v): k for k, v in old.items() if holder.get(v) != k}}
+    return old, new
 
 
 def topic_of(e):
@@ -2404,6 +2519,9 @@ def _card(title, color, elements, footer=None, tags="", live=False, state=None, 
     live：自动刷新的卡片，时间带秒。"""
     about = re.search(r"【([^】]+)】", title)
     hint = footer if footer is not None else talking_to(state, about and about.group(1))
+    for el in elements:                                 # 按钮行没指定排法时，手机上飞书一个按钮占一整行：一律按自身宽度横排
+        if el.get("tag") == "action" and "layout" not in el:
+            el["layout"] = "flow"
     return {"config": {"wide_screen_mode": True, "update_multi": True},
             "header": _header(title, color, sub),
             "elements": elements + footer_els(hint, tags, live)}
@@ -2556,6 +2674,7 @@ HELP = """🤖 我是监控机器人，帮你管这台机器上的 Claude Code �
   装了几套 codex（或几个 Claude 配置目录）时带上套的标签，比如「Codex·官方」（按它实际跑的程序认，不看名字）
 · 说给它的话前面有来源标签：你 · 飞书 / 你 · 终端（你直接在它的会话里打的）/ 3号 名字（员工之间）/ 助手 / 系统
 · 招 Codex 员工：跟秘书说「招个 codex 在 X 目录干 Y」，名字自动带 cx- 前缀；上班时自动用它原来那套环境接着原对话
+· 工号只给在上班的人：下班就收回，叫回用名字（「上班 my-app」）；上班回来的、新来的取最小的空号，在班的人号码不变
 · 「2号 → 3号」：员工之间在互发消息；同事的消息要你批准才送达
 · 底栏小标签是用时、模型、上下文、额度，快满了变橙、变红；上下文快满时会出现〔压缩上下文〕
 · 跑长实验时只说「还在等」的，只更新看板，不打扰你
@@ -2662,7 +2781,14 @@ class Remote:
     def resolve(self, word, reg, want_alive=True):
         m = re.fullmatch(r"(\d+)号?", word or "")
         if m:                                            # 工号：@2 / 2号
-            word = {n: k for k, n in load_json(BADGES, {}).items()}.get(int(m.group(1)), word)
+            k = int(m.group(1))
+            cur = {n: x for x, n in load_json(BADGES, {}).items()}.get(k)
+            old = self.renum_old(k, reg)                 # 工号重排后一天内：这个号原来是谁
+            if old and cur and reg[old].get("alive") and not (VIA["via"] == "feishu" and self.state["renum"].get("new_ok")):
+                return None, None, self.renum_clash(k, cur, old)   # 新旧两个人都在上班：不猜，免得弄错人
+            if old and not cur:
+                self.renum_note = renum_hint(k, old, self.state["renum"]["t"])   # 这个号现在没人用：照旧找原来那个人，提醒它的新号
+            word = cur or old or word
         pool = {k: v for k, v in reg.items() if v.get("alive") or not want_alive}
         if word not in pool and self.state.get("renamed", {}).get(word) in pool:
             word = self.state["renamed"][word]
@@ -2678,7 +2804,41 @@ class Remote:
     def handle(self, text, typed=False, to=None):
         """处理一条命令或一句话。typed=True 是你在手机上手打的：除了 TYPED_WORDS 这几个词，机器人不猜你的意思，
         一律交给助手（或你正在对话的员工）去理解；to 是你引用了哪个员工的卡片，就直接对它说。
-        命令行（助手用的 cr）和卡片按钮走下面的命令。"""
+        命令行（助手用的 cr）和卡片按钮走下面的命令。用了重排前的旧工号：回复前面加一句「11号现在是6号（名字）」。"""
+        self.renum_note = ""
+        out = self._handle(text, typed, to)
+        note = self.renum_note
+        if note and isinstance(out, Card):
+            head, sep, rest = out.text.partition("\n")     # 命令行里：标题下面第一行（标题行要补工号和类型）
+            out.text = f"{head}\n{note}{sep}{rest}"
+            if VIA["via"] == "feishu":
+                out.more.append(note)                    # 飞书上：卡片下面跟一行字
+        elif note and isinstance(out, str):
+            out = f"{note}\n{out}"
+        return out
+
+    def renum_old(self, k, reg):
+        """工号重排后 RENUM_SECS 秒内：k 号原来是谁（跟现在的 k 号不是同一个人、还在名单里才算）；不是就返回 None。"""
+        r = self.state.get("renum") or {}
+        old = r.get("old", {}).get(str(k)) if now() - r.get("t", 0) < RENUM_SECS else None
+        return old if old in reg else None
+
+    def renum_clash(self, k, cur, old):
+        return (f"⚠️ 工号{time.strftime('%H:%M', time.localtime(self.state['renum']['t']))}重排过，{k}号换人了：现在的 {k}号是 {cur}，"
+                f"原来的 {k}号 {old} 现在是 {badge(old) or '下班了'}。这次没有执行，免得弄错人；请写名字再发一次（比如「@{old} …」）。")
+
+    def renum_ask(self, k, cur, old, body, urgent):
+        """飞书里「@k 内容」，k 号新旧两个人都在上班：先问发给谁，不猜。点了新号就当你已经换用新号，之后不再问。"""
+        self.state["renum"]["ask"] = {"names": [cur, old], "body": body, "urgent": urgent, "t": now()}
+        self.save()
+        said = f"\n<font color='grey'>{one_line(body, 60)}</font>" if body else ""
+        card = alert(f"🔢 {k}号换人了，这句发给谁？", f"工号今天重排过：现在的 {k}号是 **{cur}**，原来的 {k}号 **{old}** 现在是 {badge(old)}。"
+                     f"这句还没发。{said}", "orange")
+        card.card["elements"][-1:-1] = _rows([_button(f"{k}号 {cur}（新号）", "#renum 0", "primary"),
+                                              _button(f"{badge(old)} {old}（原 {k}号）", "#renum 1")])
+        return card
+
+    def _handle(self, text, typed=False, to=None):
         text = text.strip()
         if not text:
             return "（空消息）"
@@ -2864,8 +3024,14 @@ class Remote:
         if who in ("助手", "秘书") or (default and who == default):
             return None                                  # 本来就交给秘书
         n = re.fullmatch(r"(\d+)号?", who)
-        if n and int(n.group(1)) not in load_json(BADGES, {}).values():
-            return None                                  # 没有这个工号：别拿数字去模糊匹配名字
+        if n:
+            k = int(n.group(1))
+            cur = {x: m for m, x in load_json(BADGES, {}).items()}.get(k)
+            old = self.renum_old(k, reg)
+            if old and cur and reg[old].get("alive") and not self.state["renum"].get("new_ok"):
+                return self.renum_ask(k, cur, old, body, urgent)   # 工号刚重排过，新旧两个人都在上班：问你发给谁
+            if not cur and not old:
+                return None                              # 没有这个工号：别拿数字去模糊匹配名字
         name, _, err = self.resolve(who, reg, want_alive=False)
         if err or not name or name.startswith("助手"):
             return None
@@ -2917,7 +3083,16 @@ class Remote:
             level = {cn: en for en, cn in EFFORTS}.get(level, level)    # 「/effort 很高」也认
             return self.button_cmd(["effort", name, level], reg) if level in EFFORT_CN else self.effort_card(name, s)
         rows = pane_rows(s)
-        if s.get("waiting") and not dialog_options(rows):     # 停在一个不是问题的框上：打的字会被框当成按键吃掉，不能发
+        qbox = crcodex.question_box(rows) if is_codex(s) and not dialog_options(rows) else None
+        if qbox and VIA["via"] == "feishu":              # codex 在问你几道题、你在飞书上打的字：当第一道题的回答（填进 Other）
+            if not body:
+                return self.ask_card(name, s, note="图片 / 文件先留着，答完题再发。") or "它在问你问题，图片 / 文件先留着，答完再发。"
+            return self.codex_pick(name, s, None, None, None, text=body)
+        if qbox and qbox["open"]:                        # 秘书 / 同事转来的话，提问框又正开着（有人在电脑上答题）：打进去会落在框里
+            return self.ask_card(name, s, note="⚠️ 它的提问框正开着，这句话没有发，免得打进框里。") \
+                or f"【{name}】的提问框正开着，这句话没有发。"
+        if s.get("waiting") and not dialog_options(rows) and not qbox:   # 停在一个不是问题的框上：打的字会被框当成按键吃掉，不能发
+                                                         # （提问框收起时主输入框照常能用：转来的话照常发，题还开着）
             held = held_peer(rows)
             if held:                                          # 同事发来的消息等批准：先存着你这句，点完〔送达〕/〔拒绝〕自动发
                 if body:
@@ -3237,9 +3412,24 @@ class Remote:
             else:
                 crterm.key(s, k)
             time.sleep(0.8)
-        card = self.screen_card(name, s, note=note)
+        card = (k != "refresh" and not note and self.menu_done_card(name, s)) or self.screen_card(name, s, note=note)
         card.in_place = True
         return card
+
+    def menu_done_card(self, name, s):
+        """在菜单里选完了、菜单关了：/model 这类直接说结果（「已切到 Opus 5.5」），不贴整屏。
+        菜单还开着、最近一句不是斜杠命令、或没认出输出的，返回 None（照常给屏幕卡片）。"""
+        rows = pane_rows(s)
+        if screen_menu(rows) or dialog_options(rows):
+            return None
+        box = _input_box(rows)
+        asked = [r for r in rows[:box[0] if box else len(rows)] if r.startswith("❯ ") and r[2:].strip()]
+        word = asked[-1].split()[1] if asked and asked[-1].startswith("❯ /") else ""
+        out = slash_output(rows, word) if word else ""
+        if not out or len(out.splitlines()) > 6:
+            return None
+        label = slash_label(word)[0]
+        return alert(f"✅【{name}】{BUTTON_EMOJI.sub('', label).strip()}", out, "green", [_button("看屏幕", f"屏 {name}")])
 
     # ------------------------------------------------------------ 像 App 一样：实时过程、停止、思考程度
 
@@ -3256,6 +3446,22 @@ class Remote:
             return self.wake_all(words[1:], reg)
         if words[0] == "night":                          # 看板上的〔🌙 看攒下的 N 条〕
             return self.release_held()
+        if words[0] == "renum":                          # 「@k 内容」问发给谁时点的：0 是现在的 k 号，1 是原来的 k 号
+            ask = (self.state.get("renum") or {}).pop("ask", None)
+            if words[1] == "0":
+                self.state["renum"]["new_ok"] = True     # 你已经换用新号了：之后 @ 新号直接发，不再问
+            self.save()
+            if not ask or words[1] not in ("0", "1"):
+                return "这句已经处理过了。"
+            card = self.deliver(ask["names"][int(words[1])], ask["body"], reg, urgent=ask["urgent"])
+            if isinstance(card, Card):
+                card.in_place = True                     # 这张问题卡片原地变成它的实时进度
+            return card
+        if words[0] == "board":                          # 看板上的〔刷新〕：原地换成最新的
+            card = self.status_card()
+            card.in_place = True
+            self.save()
+            return card
         if words[0] == "style" and len(words) > 2:      # 样式选择卡片上点的：记下你选的样式（state["style"]），之后的卡片都按它来
             self.state.setdefault("style", {})[words[1]] = words[2]
             self.save()
@@ -3355,6 +3561,10 @@ class Remote:
             return self.preview_card(name, s, words[2], words[3], words[4])
         if op == "pick" and len(words) > 4:
             return self.pick(name, s, words[2], words[3], words[4])
+        if op == "cxq" and len(words) > 4:               # codex 提问框：第几道题选第几项
+            return self.codex_pick(name, s, words[2], words[3], words[4])
+        if op == "cxqsend":                              # codex 提问框：〔提交〕卡片上选好的
+            return self.codex_submit(name, s)
         if op == "key" and len(words) > 3:
             return self.press(name, s, words[2], words[3])
         if op == "cmds":
@@ -3419,6 +3629,8 @@ class Remote:
         b, said = pt if pt else ({}, [])
         if not opts and not pt and not paused:
             return None
+        if b.get("name") == "CodexQuestions":           # codex 一次问你几道题
+            return self.codex_q_card(name, s, b, note)
         tid, inp = (f"p{s['statusAt']:.0f}" if paused else b.get("id") or "-"), b.get("input") or {}
         who = self.who(name, s)
         context = "\n\n".join(said)
@@ -3448,7 +3660,9 @@ class Remote:
                 lines.append(f"它想：**{label}**" + (f"　{desc}" if desc and b.get("name") != "Bash" else ""))
                 lines.append(tool_detail(b.get("name", ""), inp))
             else:
-                lines.append(f"它的屏幕：\n{screen(s, 25)}")
+                title, color = f"⏸【{name}】停在一个框上等你选", "orange"   # 不知道是什么框：不说「要你批准」
+                if not context:
+                    lines.append(f"<font color='grey'>屏幕上：</font>\n{clean_screen(rows, 10)}")
             lines.append("")
             for n, text in opts:
                 lines.append(f"{n}. {perm_label(text)}　<font color='grey'>{text}</font>")
@@ -3494,6 +3708,122 @@ class Remote:
         els.append(_actions(extra))
         card = Card(_card(title, color, els, state=self.state), f"{title}\n{body}")
         card.ask_id = tid
+        return card
+
+    def codex_q_card(self, name, s, b, note="", calls=()):
+        """codex 一次问你几道题（request_user_input）：每道题一行粗体题目，下面是选项按钮（选项多就用下拉）；不贴屏幕
+        （上面那些命令输出跟题目无关）。点选项只是在卡片上选上（state["cxq_pick"]）：那个按钮变蓝色实心、题目后面灰字「已选：…」，
+        没提交前再点别的就改；点〔提交〕才在它的提问框里按键（codex_submit）。交了的题收成一行灰字「你的回答：…」，
+        都交完标题变成「已回答」。calls：屏幕上已经没有题时，用这几次提问在卡片上交过的回答画「已回答」。"""
+        qs = (b.get("input") or {}).get("questions") or []
+        left = (b.get("input") or {}).get("left") or len(qs)
+        calls = set(calls) | {q["call"] for q in qs}
+        done = sorted((x for x in (self.state.get("cxq") or {}).get(name, []) if x.get("call") in calls), key=lambda x: x["t"])
+        picks = (self.state.get("cxq_pick") or {}).get(name) or {}
+        order = list(dict.fromkeys([x["call"] for x in done] + [q["call"] for q in qs]))
+        items = sorted([(q, None) for q in qs] + [(None, x) for x in done],
+                       key=lambda it: (order.index((it[0] or it[1])["call"]), (it[0] or it[1]).get("idx", 0)))
+        title = f"❓【{name}】" + (f"在问你 {len(qs)} 道题" if len(qs) > 1 else "在问你" if qs or not done else "已回答")
+        els = [_note(note)] if note else []
+        for q, x in items:
+            if x:                                        # 交了的：收成一行
+                els.append(_mk(f"**{one_line(x['q'], 200)}**\n<font color='grey'>你的回答：{one_line(x['a'], 200)}</font>"))
+                continue
+            got = picks.get(f"{q['call']}:{q['idx']}")
+            opts, notes = q.get("options") or [], q.get("notes") or []
+            text = f"**{one_line(q['title'], 200)}**" + (f"　<font color='grey'>已选：{fit(got['a'], 12)}</font>" if got else "")
+            if any(notes):                               # 选项带说明的（计划模式里的那种）：说明一行一条灰字
+                text += "\n" + "\n".join(f"<font color='grey'>{fit(o + '：' + d, LINE_EM)}</font>" for o, d in zip(opts, notes) if d)
+            els.append(_mk(text))
+            cmd = lambda k: f"#cxq {name} {q['call'][-8:] or '-'} {q['idx']} {k}"
+            mine = (got or {}).get("k")
+            if len(opts) > 4:                            # 选项多：下拉，选了的显示在框里
+                sel = {"tag": "select_static", "placeholder": {"tag": "plain_text", "content": f"选一个（{len(opts)} 项）"},
+                       "options": [{"text": {"tag": "plain_text", "content": fit(o, LINE_EM - 4)}, "value": cmd(k)} for k, o in enumerate(opts, 1)]}
+                if mine:
+                    sel["initial_option"] = cmd(mine)
+                els.append({"tag": "action", "actions": [sel]})
+            elif opts:                                   # 一行放几个：字短的两三个一行、一样宽，长的一个一行
+                widest = max(text_em(o) for o in opts)
+                per = 3 if len(opts) == 3 and widest <= LINE_EM / 3 - 2.6 else 2 if widest <= LINE_EM / 2 - 2.6 else 1
+                buttons = [_button(fit(o, LINE_EM - 3), cmd(k), "primary_filled" if k == mine else "default") for k, o in enumerate(opts, 1)]
+                els += [{"tag": "action", "layout": {3: "trisection", 2: "bisected", 1: "default"}[per], "actions": buttons[i:i + per]}
+                        for i in range(0, len(buttons), per)]
+        if not items:                                    # 对话记录里没读到题：只能看屏幕
+            els.append(_mk(f"它在问你 {left} 道题，题目没读出来。点〔看屏幕〕，用遥控键 shift+← 打开提问框。"))
+        picked = [q for q in qs if f"{q['call']}:{q['idx']}" in picks]
+        send = [_button("提交回答" if len(picked) == len(qs) else f"提交已选的 {len(picked)} 道", f"#cxqsend {name}", "primary_filled")] if picked else []
+        els.append(_actions(send + [_button("回复它", f"对话 {name}"), _button("看屏幕", f"屏 {name}")]))
+        hint = "点选项先选上，选错可以改，点〔提交〕才交给它" if qs else "交给它了，它接着干，做完会发汇报"
+        text = "\n\n".join(f"{q['title']}\n" + (f"你的回答：{x['a']}" if x else " / ".join(q.get("options") or [])) for q, x in
+                            [(it[0] or {"title": it[1]["q"]}, it[1]) for it in items])
+        card = Card(_card(title, "orange" if qs else "grey", els, footer=hint, state=self.state), f"{title}\n{text}")
+        card.ask_id = b.get("id") or "q"
+        return card
+
+    def _cxq_open(self, s):
+        """codex 提问框里还开着的题：(waiting_on 那一项, [题])。"""
+        pt = waiting_on(s)
+        b = pt[0] if pt else {}
+        return (b, (b.get("input") or {}).get("questions") or []) if b.get("name") == "CodexQuestions" else ({}, [])
+
+    def _cxq_done(self, name, s, q, answer):
+        """一道题交上去了：对话记录里这条回答标成你从飞书答的，卡片上收成「你的回答」。"""
+        note_sent(s, f"回答「{q['title']}」：{answer}")
+        done = self.state.setdefault("cxq", {}).setdefault(name, [])
+        done.append({"call": q["call"], "idx": q["idx"], "q": q["title"], "a": answer, "t": now()})
+        self.state["cxq"][name] = [x for x in done if now() - x["t"] < 86400][-20:]
+        (self.state.get("cxq_pick") or {}).get(name, {}).pop(f"{q['call']}:{q['idx']}", None)
+        self.save()
+
+    def codex_pick(self, name, s, call, idx, k, text=None):
+        """codex 提问框：卡片上点了某道题的某个选项——只记下（选错了再点别的就改），卡片原地刷新，不按键。
+        text 不为 None 是你在飞书上打了字：直接交给第一道还开着的题（填进 Other）。"""
+        b, qs = self._cxq_open(s)
+        picks = self.state.setdefault("cxq_pick", {}).setdefault(name, {})
+        if text is not None:
+            q = next((x for x in qs if f"{x['call']}:{x['idx']}" not in picks), qs[0] if qs else None)
+        else:
+            q = next((x for x in qs if (x["call"][-8:] or "-") == call and str(x["idx"]) == str(idx)), None)
+        opts = (q or {}).get("options") or []
+        if not q or text is None and not (str(k).isdigit() and 1 <= int(k) <= len(opts)):
+            card = alert(f"✅【{name}】这道题已经过去了", "可能你已经在电脑上答过或跳过了，这次没有按任何键。", "grey",
+                         [_button("看屏幕", f"屏 {name}")])
+            card.in_place = True
+            return card
+        calls = {x["call"] for x in qs}
+        if text is None:
+            picks[f"{q['call']}:{q['idx']}"] = {"k": int(k), "a": opts[int(k) - 1], "t": now()}
+            self.save()
+            card = self.codex_q_card(name, s, b)
+        else:
+            ok, why = crcodex.answer_question(s, q["title"], text=text)
+            if ok:
+                self._cxq_done(name, s, q, " ".join(text.split()))
+                time.sleep(0.3)
+                b = self._cxq_open(s)[0]
+            card = self.codex_q_card(name, s, b, note="" if ok else f"⚠️ 你打的字没交上：{why}。没有再按别的键。", calls=calls)
+        card.in_place = True
+        return card
+
+    def codex_submit(self, name, s):
+        """〔提交〕：把卡片上选好的题一道道交给它（crcodex.answer_question 每按一下都核对屏幕，对不上就停手），卡片原地刷新。"""
+        b, qs = self._cxq_open(s)
+        picks = (self.state.get("cxq_pick") or {}).get(name) or {}
+        todo = [(q, picks[f"{q['call']}:{q['idx']}"]) for q in qs if f"{q['call']}:{q['idx']}" in picks]
+        calls = {q["call"] for q in qs}
+        note = ""
+        if not todo:
+            note = "没有要交的：选好的题可能已经在电脑上答过了。这次没有按任何键。"
+        for q, got in todo:
+            ok, why = crcodex.answer_question(s, q["title"], got["k"], got["a"])
+            if not ok:
+                note = f"⚠️ 「{fit(q['title'], 12)}」没交上：{why}。没有再按别的键。"
+                break
+            self._cxq_done(name, s, q, got["a"])
+        time.sleep(0.3)
+        card = self.codex_q_card(name, s, self._cxq_open(s)[0], note=note, calls=calls)
+        card.in_place = True
         return card
 
     def question_els(self, name, tid, qs, qi):
@@ -3572,6 +3902,11 @@ class Remote:
         pt = waiting_on(s)
         b = pt[0] if pt else {}
         tid, inp = b.get("id") or "-", b.get("input") or {}
+        if b.get("name") == "CodexQuestions":
+            return {"kind": "questions", "id": tid, "title": f"在问你 {inp.get('left') or 0} 道题", "detail": "",
+                    "questions": [{"title": q["title"], "options": [{"label": o, "cmd": f"#cxq {name} {q['call'][-8:] or '-'} {q['idx']} {k}"}
+                                                                    for k, o in enumerate(q["options"], 1)]} for q in inp.get("questions") or []],
+                    "options": []}
         if b.get("name") == "AskUserQuestion":
             qs = inp.get("questions") or []
             q = qs[0] if qs else {}
@@ -3908,6 +4243,9 @@ class Remote:
         effort = bar.get("effort", "")
         texts = [t for k, t, _ in steps if k == "text"]
         reply = turn_answer(texts)                     # 只要这一轮的回答；没有就说没有，不拿上一轮的充数
+        answers = turn_answers(steps)
+        if len(answers) > 1:                           # 它忙时你又发了一句（排队，答完上一句才轮到）：两轮的回答都放上，各标一句答的是哪句
+            reply = "\n\n".join(turn_label(qs) + a for qs, a in answers)
         if texts:
             self.note_latest(name, s["statusAt"], texts[-1])
         tools = sum(1 for k, _, _ in steps if k == "tool")
@@ -3933,7 +4271,7 @@ class Remote:
         els = (quote + ([{"tag": "hr"}] if quote else []) + chunks[0]
                + ([{"tag": "action", "actions": file_buttons(files)}] if files else []) + options + [_actions(main, more)])
         tags = usage_tags(bar, extra=[(f"跑了 {took}" if stopped else f"用时 {took}") + (f" · {tools} 步" if tools else "")])
-        card = Card(_card(title, color, els, tags=tags, state=self.state, sub=sub), f"{title}\n{body}")
+        card = Card(_card(title, color, els, tags=tags, state=self.state, sub=sub), f"{title}\n" + re.sub(r"</?font[^>]*>", "", body))
         card.reply_for = name
         return continued(card, title, color, chunks)
 
@@ -4002,22 +4340,22 @@ class Remote:
         return continued(card, title, color, chunks)
 
     def note_latest(self, name, t, text, loud=False):
-        """〔📋 员工看板〕上它那一行的「最新」：它最近停下时说的最后一句。"""
-        first = first_sentence(text)
-        self.state.setdefault("bg", {})[name] = {"t": t, "text": one_line(first, 100) if first else "（醒来看了一眼，没写新的话）",
-                                                 "loud": loud}
+        """〔📋 员工看板〕上它那一行的「最新」：它最近停下时说的最后一句（没说话的记成空，看板上就不写）。
+        第一句只是个引子（「压缩包打好了：」）就接上下一行。"""
+        lines = [first_sentence(x) for x in (text or "").splitlines() if first_sentence(x)]
+        first = " ".join(lines[:2]) if lines and lines[0].endswith(("：", ":")) else (lines[0] if lines else "")
+        self.state.setdefault("bg", {})[name] = {"t": t, "text": one_line(first, 100), "loud": loud}
 
     def bg_update(self, name, e, turn, loud):
         """它停下了：记下最新一句话。后台醒来、没什么要你管的，就只更新看板，不单独发卡片。"""
         self.note_latest(name, e["statusAt"], turn["texts"][-1] if turn["texts"] else "", loud)
 
     def board_rows(self):
-        """看板上的员工：活着的（助手排第一）和最近一周下班的；每日资讯这类自动任务不算。"""
+        """看板上的员工：在上班的和最近一周下班的（刚下班的在前）；助手（就是在跟你说话的那个）、每日资讯这类自动任务不算。"""
         reg = load_json(REGISTRY, {})
-        alive = {n: e for n, e in reg.items() if e.get("alive") and not is_quiet(n)
-                 and (not is_assistant(n) or n == self.state.get("default"))}
-        off = sorted(n for n, e in reg.items() if not e.get("alive") and not is_quiet(n) and not is_assistant(n)
-                     and now() - e.get("died", 0) < 7 * 86400)
+        alive = {n: e for n, e in reg.items() if e.get("alive") and not is_quiet(n) and not is_assistant(n)}
+        off = sorted((n for n, e in reg.items() if not e.get("alive") and not is_quiet(n) and not is_assistant(n)
+                      and now() - e.get("died", 0) < 7 * 86400), key=lambda n: (-reg[n].get("died", 0), n))
         return alive, off
 
     def board_sig(self):
@@ -4026,59 +4364,126 @@ class Remote:
         why = self.state.get("said_last", {})
         return json.dumps([sorted((n, e.get("status"), e.get("waiting"), rows.get(n, {}).get("t"), why.get(n, {}).get("t"))
                                   for n, e in alive.items()), off,
-                           sorted(self.state.get("asking", {})), self.state.get("held", 0), self.quiet_now()])
+                           sorted(self.state.get("asking", {})), self.state.get("held", 0), self.quiet_now(),
+                           sorted(load_json(BADGES, {}).items()), time.strftime("%m%d%H")])   # 换了号、到点了（今天→昨天、一天没动静折起来）也重画
 
     def status_card(self, minor=False):
-        """〔📋 员工看板〕：每个员工一行，谁在干活、谁在等你、最新说了什么；原地更新，飞书不响。
-        在群里会被置顶；还没建群时被新消息刷上去太多了，下次有人停下时挪到最下面。"""
+        """〔📋 员工看板〕：标题下面一行摘要「2 人干活 · 8 人空闲」。按状态分组（等你 → 干活中 → 等后台 → 空闲），组之间一条细线，
+        每组一个灰色小标题带人数；每人一行：彩色小标签（等你红、干活中绿、等后台橙，空闲不加）+ 工号 名字 + CC / Codex 小标签，
+        时间靠右（今天 13:28 / 昨天 / 10/29）；干活、等后台、等你的下面一行灰字是最新一句（单行截断），空闲的今天有新话才写。
+        空闲里一天以上没动静的折成一行灰字，下班的一行灰字只列名字（下班就没有工号了）。助手不列（它就是在跟你说话的那个）。
+        底下「选员工」下拉 + 〔看攒下的 N〕〔刷新〕，其余在「···」。原地更新，飞书不响；在群里会被置顶。"""
         alive, off = self.board_rows()
         rows = {n: r for n, r in self.state.get("bg", {}).items() if n in alive and now() - r["t"] < 3 * 86400}
         self.state["bg"] = rows
-        order = sorted(alive, key=lambda n: (not is_assistant(n), alive[n].get("status") != "busy", -rows.get(n, {}).get("t", 0)))
-        lines = []
-        for name in order:
-            e = alive[name]
-            if e.get("status") == "busy":
-                state = "🟢 干活中"
-            elif name in self.state.get("asking", {}):
-                state = "🙋 等你拍板"
-            elif e.get("waiting"):
-                state = "🙋 等你" + ("批准" if "permission" in e["waiting"] else "回答")
-            elif e.get("status") == "shell":
-                state = "⏳ 等后台任务"
-            else:
-                state = "⏸ 空闲"
-            r = rows.get(name)
-            why = self.state.get("said_last", {}).get(name)
-            if e.get("status") == "busy" and why and why["t"] >= e.get("statusAt", 0) - 5 and not is_assistant(name):
-                r = {"t": why["t"], "text": why["line"]}    # 干活的起因：你在电脑上说的 / 同事发来的
-            when = f" · {time.strftime('%H:%M', time.localtime(r['t']))}" if r else ""
-            role = "（秘书）" if is_assistant(name) else ""
-            name_md = " ".join(x for x in (badge(name), f"<font color='{'purple' if is_codex(e) else 'blue'}'>{mark(e)}</font>", f"**{name}**") if x)
-            latest = f"\n<font color='grey'>{r['text']}</font>" if r and not is_assistant(name) else ""
-            lines.append(f"{state}　{name_md}{role}{when}{latest}")
-        if off:
-            lines.append(f"🌙 下班了：{'、'.join(label_name(n) for n in off)}　<font color='grey'>（发「上班 工号」接着干）</font>")
-        held, hours = self.state.get("held", 0), self.night()
-        if self.quiet_now():
-            lines.insert(0, f"🌙 夜间免打扰（{hours[0]}:00–{hours[1]}:00，你发消息或在电脑上用 Claude 就恢复）：只推要你拍板的"
-                            + (f"，其余攒了 {held} 条" if held else ""))
-        elif held:
-            lines.insert(0, f"🌙 你不在时攒了 {held} 条没推（要你拍板的当时推了），点〔🌙 看攒下的〕")
         asking = {n: a for n, a in self.state.get("asking", {}).items() if n in alive}
-        if asking:                                       # 最上面：谁在等你拍板、问的是什么
-            todo = "\n".join(f"· {badge(n) or ''} **{n}**：{a['q']}" for n, a in sorted(asking.items(), key=lambda x: x[1]["t"]))
-            lines.insert(0, f"**🙋 待拍板 {len(asking)}**\n{todo}")
-        els = [_md("\n\n".join(lines) or "现在还没有员工。")]
-        buttons = [_button(label_name(n), f"#enter {n}") for n in order if not is_assistant(n)][:8]
-        els += _rows(buttons)
-        if held:
-            els.append({"tag": "action", "actions": [_button(f"🌙 看攒下的 {held} 条", "#night all", "primary")]})
-        els.append(_md("<font color='grey'>派活：打「@工号 内容」（比如 @2 先跑诊断），或引用它的卡片回复；「@所有人 …」发给全体。"
-                       "只说「还在等」的只更新这张看板；要你拍板、有新进展时才单独发卡片，同一个员工 10 分钟内的合成一张。"
-                       "夜里你不在时只推要你拍板的。点名字＝看详情并开始跟它说话。</font>"))
-        card = Card(_card("📋 员工看板", "wathet", els, footer=talking_to(self.state), tags=usage_tags({})),
-                    "📋 员工看板\n" + "\n".join(lines))
+        said = self.state.get("said_last", {})
+        today = time.localtime()[:3]
+
+        def group(e, name):
+            if name in asking or e.get("waiting"):
+                return 0
+            g = {"busy": 1, "shell": 2}.get(e.get("status"), 3)
+            return 4 if g == 3 and now() - (e.get("statusAt") or 0) > 86400 else g   # 4：空闲里一天以上没动静的，折成一行
+
+        def latest(name, e, g):
+            if g == 0:
+                if name in asking:
+                    return asking[name]["q"]
+                return "要你批准" if "permission" in (e.get("waiting") or "") else "在问你问题"
+            why = said.get(name)
+            if g == 1 and why and why["t"] >= e.get("statusAt", 0) - 5:
+                return why["line"]                           # 干活的起因：你在电脑上说的 / 同事发来的
+            r = rows.get(name) or {}
+            text = "" if r.get("text", "").startswith("（醒来看了一眼") else r.get("text", "")
+            return text if g < 3 or time.localtime(r.get("t", 0))[:3] == today else ""
+
+        def when(t):
+            if not t:
+                return ""
+            lt = time.localtime(t)
+            if lt[:3] == today:
+                return time.strftime("%H:%M", lt)
+            return "昨天" if time.localtime(t + 86400)[:3] == today else f"{lt.tm_mon}/{lt.tm_mday}"
+
+        def folded(label, names, numbered):
+            """「久没动静 4：1号 forcing、2号 forcing:4…」：一行灰字，都叫 exp-xxx 的只写 xxx；放不下的不截半个名字，写「…」。"""
+            pre = os.path.commonprefix(names) if len(names) > 1 else ""
+            pre = pre[:pre.rfind("-") + 1]
+            line, shown = f"{label} {len(names)}：", 0
+            for n in names:
+                one = ("、" if shown else "") + " ".join(x for x in (badge(n) if numbered else "", n[len(pre):] or n) if x)
+                if text_em(line + one) > NOTE_EM - 1:
+                    line += "…"
+                    break
+                line, shown = line + one, shown + 1
+            return _note(line), line
+
+        order = sorted(alive, key=lambda n: (group(alive[n], n), -alive[n].get("statusAt", 0)))
+        groups = {g: [n for n in order if group(alive[n], n) == g] for g in range(5)}
+        names = {0: "等你", 1: "干活中", 2: "等后台", 3: "空闲"}
+        tags = {0: "red", 1: "green", 2: "orange"}
+        els, text = [], []
+        for g in range(4):
+            members = groups[g] + (groups[4] if g == 3 else [])
+            if not members:
+                continue
+            if els:
+                els.append({"tag": "hr"})
+            els.append(_note(f"{names[g]} {len(members)}"))
+            text.append(f"{names[g]} {len(members)}")
+            left, right = [], []
+            for name in groups[g]:
+                e = alive[name]
+                kind = mark(e)
+                tag = f"<text_tag color='{'violet' if kind.startswith('Codex') else 'neutral'}'>{kind}</text_tag>"
+                state = f"<text_tag color='{tags[g]}'>{names[g]}</text_tag> " if g in tags else ""
+                stamp = when(e.get("statusAt"))
+                who = badge(name) + " " if badge(name) else ""
+                room = LINE_EM - (text_em(names[g]) * 0.85 + 1.9 if g in tags else 0) - text_em(kind) * 0.85 - 1.3 - text_em(stamp) - 1.5
+                left.append(f"{state}{who}**{fit(name, room - text_em(who))}** {tag}")
+                right.append(f"<font color='grey'>{stamp}</font>" if stamp else "　")
+                text.append(f"· {names[g] + ' ' if g in tags else ''}{who}{name} {kind}  {stamp}")
+                line = latest(name, e, g)
+                if line:
+                    left.append(f"<font color='grey'>　{fit(line, LINE_EM - 5)}</font>")
+                    right.append("　")                     # 占一行，右边的时间才跟名字对齐
+                    text.append(f"    {one_line(line, 60)}")
+            if left:
+                els.append({"tag": "column_set", "flex_mode": "none", "columns": [
+                    {"tag": "column", "width": "weighted", "weight": 1, "elements": [_mk("\n".join(left))]},
+                    {"tag": "column", "width": "auto", "elements": [{"tag": "markdown", "content": "\n".join(right), "text_align": "right"}]}]})
+            if g == 3 and groups[4]:
+                el, line = folded("久没动静", sorted(groups[4], key=lambda n: (badge(n) == "", int(badge(n)[:-1] or 0), n)), True)
+                els.append(el)
+                text.append(line)
+        if off:                                          # 下班的：一行灰字，只有名字（下班就没有工号了），刚下班的在前
+            if els:
+                els.append({"tag": "hr"})
+            el, line = folded("下班", off, False)
+            els.append(el)
+            text.append(line)
+        if not order and not off:
+            els.append(_md("现在还没有员工。"))
+        held, hours = self.state.get("held", 0), self.night()
+        sub = " · ".join([f"{len(groups[g]) + (len(groups[4]) if g == 3 else 0)} 人{names[g].replace('干活中', '干活')}"
+                          for g in range(4) if groups[g] or (g == 3 and groups[4])]
+                         + ([f"夜间免打扰到 {hours[1]}:00"] if self.quiet_now() else [])) or "没有人在上班"
+        pick = {"tag": "select_static", "placeholder": {"tag": "plain_text", "content": "选员工"},
+                "options": [{"text": {"tag": "plain_text", "content": fit(label_name(n), LINE_EM - 4)}, "value": f"#enter {n}"}
+                            for n in order]
+                           + [{"text": {"tag": "plain_text", "content": fit(label_name(n) + "（下班）", LINE_EM - 4)}, "value": f"#enter {n}"}
+                              for n in off]}
+        main = ([_button(f"看攒下的 {held}", "#night all", "primary")] if held else []) + [_button("刷新", "#board now")]
+        more = [_button("名单", "列表"), _button("怎么用", "帮助")]
+        while len(main) > 1 and 8.5 + sum(_btn_em(b) + 0.6 for b in main) + 3 > LINE_EM:   # 下拉大约 8 个字宽；放不下的挪进「···」
+            more.insert(0, main.pop())
+        bar = _actions(main, more)
+        if pick["options"]:
+            bar["actions"].insert(0, pick)
+        els.append(bar)
+        card = Card(_card("📋 员工看板", "wathet", els, footer=talking_to(self.state), tags=usage_tags({}), sub=sub),
+                    "📋 员工看板\n" + "\n".join([sub] + text))
         card.slot, card.minor = "status", minor
         return card
 
@@ -4139,6 +4544,8 @@ class Remote:
                 out.append((name, alert(f"❌【{name}】{agent_word(reg_entry(name))} 退出了", "这句话没等到回复。", "red",
                                         [_button("重启", f"重启 {name}", "danger"), _button("返回列表", "看看")]), True))
             elif s["status"] != "busy" and since <= s["statusAt"] + 1:
+                if s.get("waiting") and screen_menu(pane_rows(s)) and not waiting_on(s):
+                    s = dict(s, waiting="")                 # 停在你自己打开的菜单上（答完以后你发了 /model）：不是它在问你，回复照常发，菜单在屏幕卡片里选
                 ask = self.ask_card(name, s) if s.get("waiting") else None
                 heard = ask or any(turn_steps(s.get("sessionId"), since))   # 对话记录里有你这句话（或它的回应）
                 if s.get("waiting") and not ask and now() - s["statusAt"] < 10 or not heard and now() - since < 20:
@@ -4312,7 +4719,10 @@ class Remote:
             return alert(f"⚠️【{name}】没能关闭", "它可能正在执行操作。点〔看屏幕〕看看。", "red", [_button("看屏幕", f"屏 {name}")])
         if is_assistant(name) or is_quiet(name):
             crterm.close_group(s)                        # 助手、资讯关了就不留空壳 shell
-        return alert(f"🌙【{name}】下班了", "对话都留着。上班后在原目录接着原来的对话干（也可以发「上班 " + (badge(name)[:-1] or name) + "」）。", "grey",
+        was = badge(name)
+        release_badge(name)                              # 下班就收回工号，回来时取最小的空号
+        return alert(f"🌙 {was}【{name}】下班了", f"对话都留着，工号 {was} 收回了。上班后在原目录接着原来的对话干（也可以发「上班 {name}」）。"
+                     if was else f"对话都留着。上班后在原目录接着原来的对话干（也可以发「上班 {name}」）。", "grey",
                      [_button("上班", f"上班 {name}", "primary"), _button("看板", "看看")])
 
     def codex_quit(self, s):
@@ -4358,12 +4768,13 @@ class Remote:
             elif is_assistant(name):
                 bad.append(f"{name}：助手是秘书，不下班")
             else:
+                label = label_name(name)                 # 下班前的工号（关掉就收回了）
                 self.cmd_close(name, s)
                 if _proc_alive(s["pid"]):
-                    bad.append(f"{label_name(name)}：没关掉，可能正在执行操作，点〔看屏幕〕看看")
+                    bad.append(f"{label}：没关掉，可能正在执行操作，点〔看屏幕〕看看")
                 else:
-                    done.append(label_name(name))
-        lines = [f"已下班：{'、'.join(done)}。对话记录都留着，发「上班 工号」或「@工号 上班」接着干。"] if done else []
+                    done.append(label)
+        lines = [f"已下班：{'、'.join(done)}。工号收回了，对话记录都留着，发「上班 名字」接着干。"] if done else []
         return alert(f"🌙 {len(done)} 位员工下班了", "\n".join(lines + bad), "grey", [_button("看板", "看看")])
 
     def fire_card(self, name, e):
@@ -4568,7 +4979,7 @@ class Remote:
 
     def wake(self, name, e):
         """让下班的员工上班：走安全启动脚本（检查代理、带上代理环境变量），在原目录 --resume 原来的对话，
-        名字和工号不变；等它能接话了再返回。返回 (会话, 出错说明)。"""
+        名字不变，工号取最小的空号；等它能接话了再返回。返回 (会话, 出错说明)。"""
         out = self.cmd_restart(name, e)
         seen = 0
         for _ in range(60):
@@ -4588,7 +4999,7 @@ class Remote:
             live = discover()
             for name, s in live.items():
                 if s.get("private") and s["group"] == tname:
-                    if keep and name != keep:            # 下班前叫什么，上班后还叫什么（工号也跟着）
+                    if keep and name != keep:            # 下班前叫什么，上班后还叫什么
                         aliases = load_json(ALIASES, {})
                         aliases[str(s["pid"])] = keep
                         save_json(ALIASES, aliases)
@@ -4599,7 +5010,8 @@ class Remote:
                             if crcodex.ready(s) or screen_menu(rows) or any("open in another app" in r for r in rows):
                                 break
                             time.sleep(1)
-                    return f"{agent_word(s)} 已起来（会话名 {name}）。屏幕：\n{screen(s, 15)}"
+                    sync_badges(self.refresh()[1])       # 上班 / 新来的：马上分工号（最小的空号）
+                    return f"{agent_word(s)} 已起来（会话名 {name}{'，' + badge(name) if badge(name) else ''}）。屏幕：\n{screen(s, 15)}"
         if crterm.launch_mode() != "tmux" and not LAUNCH:
             return "20 秒内没看到 claude 起来。看一眼电脑上新开的那个终端窗口里写了什么。"
         sess = {"term": "tmux", "socket": PRIVATE_SOCK, "pane": f"={tname}:"}
@@ -4738,13 +5150,7 @@ class Remote:
         hired = [] if roster is None else [n for n in staff if n not in roster]   # 第一次：现有的都算老员工，不发入职
         roster = [n for n in (roster if roster is not None else staff) + hired if n in reg]
         self.state["roster"] = roster
-        badges = load_json(BADGES, {})
-        new = {n: v for n, v in badges.items() if n in roster}            # 开除了（名单里没了）的收回工号
-        for name in sorted(roster, key=lambda n: (reg[n].get("startedAt") or 0, n)):
-            if name not in new:
-                new[name] = min(set(range(1, len(new) + 2)) - set(new.values()))
-        if new != badges:
-            save_json(BADGES, new)
+        new = sync_badges(reg)                           # 只有在上班的占号：下班的收回，新来的、回来的取最小空号
         for name in hired:
             e = reg[name]
             if first_run:
@@ -4753,7 +5159,7 @@ class Remote:
             n = new.get(name)
             card = alert(f"👋【{name}】入职了", f"派活：发「@{n} 内容」，或引用本卡片回复。" if n else "引用本卡片回复就能给它派活。", "turquoise",
                          [_button("回复它", f"对话 {name}", "primary"), _button("看屏幕", f"屏 {name}")])
-            card.card["elements"][-1] = footer_els("", usage_tags(st, extra=[f"思考 {EFFORT_CN.get(st.get('effort'), '')}" if st.get("effort") else ""]))[-1]
+            card.card["elements"][-1] = footer_els("", usage_tags(st))[-1]
             self.push(card, "hire")
         sig = self.board_sig()
         if sig != self.state.get("board_sig") and now() - self.state.get("board_at", 0) >= 10:

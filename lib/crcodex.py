@@ -154,6 +154,18 @@ def _text(item):
     return "".join(c.get("text", "") for c in item.get("content") or [] if isinstance(c, dict)).strip()
 
 
+def readable(text):
+    """提问框里的回答在对话记录里是「<send_user_message_question_reply>」包着的一段 JSON：换成「回答「题目」：答案」。"""
+    if "<send_user_message_question_reply>" not in (text or ""):
+        return text
+    body = text.split("<send_user_message_question_reply>", 1)[1].split("</send_user_message_question_reply>", 1)[0]
+    try:
+        items = json.loads(body)
+        return "\n".join(f"回答「{it.get('question', '')}」：{it.get('answer', '')}" for it in items if isinstance(it, dict)) or text
+    except (ValueError, TypeError):
+        return text
+
+
 def turn_error(p):
     """task_complete 里带的错误（模型不可用、额度用完、网络断了…）→ 一句给人看的话；没有错误返回 ""。"""
     err = p.get("error") if p.get("type") == "task_complete" else None
@@ -244,7 +256,7 @@ def thread_name(home, sid):
 class _Index:
     """每个 rollout 文件读到哪了、最后一轮开始 / 结束在什么时候、模型、上下文和额度。只读新写进来的部分。"""
     MARKS = (b'"task_started"', b'"task_complete"', b'"turn_aborted"', b'"turn_context"', b'"token_count"',
-             b'"thread_settings_applied"')
+             b'"thread_settings_applied"', b'"request_user_input')
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -297,6 +309,8 @@ class _Index:
         elif kind == "thread_settings_applied":
             ts = p.get("thread_settings") or {}
             st["model"], st["effort"] = ts.get("model") or st["model"], ts.get("reasoning_effort") or st["effort"]
+        elif kind == "function_call" and str(p.get("name", "")).startswith("request_user_input"):
+            st["ask_t"] = t                              # 最近一次问你题（提问框开着时，这就是开始等你的时间）
         elif kind == "token_count":
             if isinstance(p.get("info"), dict):
                 st["tok"] = p["info"]
@@ -478,6 +492,10 @@ def discover():
         if action or (status == "busy" and not prefix and t["term"] != "none" and dialog(pane_rows(t))):
             waiting, status = "permission prompt", "waiting"
             at = (state[2] if state else 0) or at          # 停在批准框上：这段时间对话记录不再写，最后一条的时间就是开始等的时间
+            rows = pane_rows(t) if t["term"] != "none" else []
+            if not dialog(rows) and question_box(rows):    # 一次问你几道题：它可能还在接着干，对话记录照样在写，从问的那一刻算起
+                waiting = "questions"
+                at = (INDEX.get(path).get("ask_t") if path else 0) or at
         info = home_info(home)
         found.append({
             "pid": p.pid, "agent": "codex", "sessionId": sid, "threadPrefix": prefix, "cwd": cwd, "cfg": home, "home": home,
@@ -553,7 +571,7 @@ def turn_steps(path, since):
             steps.append(("text", turn_error(p), True))
         elif item.get("type") == "UserMessage":
             if not asked and _text(item):
-                asked = _text(item)
+                asked = readable(_text(item))
             if said_of(e):
                 steps.append(("said", said_of(e), True))   # 谁说的（飞书 / 终端…）由 crcore.label_said 对出来
         elif item.get("type") == "AgentMessage" and _text(item):
@@ -622,7 +640,7 @@ def user_texts(path, size=4 << 20):
     for e in _records(path, size):
         item = _item(e)
         if item.get("type") == "UserMessage" and _text(item):
-            out.append((_ts(e.get("timestamp")), _text(item)))
+            out.append((_ts(e.get("timestamp")), readable(_text(item))))
     return out
 
 
@@ -665,7 +683,7 @@ def said_of(e):
     item = _item(e)
     if item.get("type") != "UserMessage":
         return None
-    text = _text(item)
+    text = readable(_text(item))
     images = sum(1 for c in item.get("content") or [] if isinstance(c, dict) and "image" in str(c.get("type", "")).lower())
     if not text and not images:
         return None
@@ -715,8 +733,15 @@ def dialog_options(rows):
 
 def waiting_on(s, rows, hook=None):
     """它停在批准框上等的是哪一步：({"id", "name", "input"}, [])，跟 crcore.waiting_on 一个格式；不在等返回 None。
-    有 PermissionRequest hook 记下的（hook，必须是这次等之前刚记的）就用它（完整命令）；没有就用屏幕上框里的内容。"""
+    有 PermissionRequest hook 记下的（hook，必须是这次等之前刚记的）就用它（完整命令）；没有就用屏幕上框里的内容。
+    一次问你几道题（提问框）：{"name": "CodexQuestions", "input": {"questions": 还开着的题, "left": 屏幕上还剩几道}}。"""
     d = dialog(rows)
+    if not d:
+        oq = open_questions(s, rows)
+        if oq:
+            last = oq["questions"][-1] if oq["questions"] else {}
+            return {"id": "q" + (last.get("call") or "screen")[-8:], "name": "CodexQuestions",
+                    "input": {"questions": oq["questions"], "left": oq["box"]["left"]}}, []
     if hook and hook.get("t", 0) >= (s.get("statusAt") or 0) - 10:
         inp = hook.get("tool_input") if isinstance(hook.get("tool_input"), dict) else {"command": hook.get("tool_input")}
         name = {"exec_command": "Bash", "shell": "Bash", "local_shell": "Bash", "shell_command": "Bash"}.get(hook.get("tool_name"), hook.get("tool_name"))
@@ -727,6 +752,237 @@ def waiting_on(s, rows, hook=None):
     reason = next((r.split(":", 1)[1].strip() for r in d["body"] if r.startswith("Reason:")), "")
     return {"id": d["sig"], "name": "CodexDialog", "input": {"ask": d["ask"], "label": d["label"], "command": cmd,
                                                              "reason": reason, "body": "\n".join(d["body"])}}, []
+
+
+QBOX_FOOT_RE = re.compile(r"\benter submit\b.*\^\]\s*skip")     # 提问框展开时的底部提示
+QCOUNT_RE = re.compile(r"^\?\s+(\d+)\s+questions?\b")              # 收起时：「? 2 questions · 20s」
+QPOS_RE = re.compile(r"^(\d+) of (\d+)$")
+QREPLY_TAG = "<send_user_message_question_reply>"
+
+
+def _norm(text):
+    return re.sub(r"\s+", "", text or "")
+
+
+def question_box(rows):
+    """codex 一次问你几道题（request_user_input）时屏幕底部的提问框；没有返回 None。
+    收起时（光标在主输入框，它可能还在接着干）只有一个提示，返回 {"open": False, "left": 还剩几道}：
+        ? 2 questions · 20s
+          shift+← to answer
+    展开时一次显示一道，按数字键就选上并交上去，最后一项 Other 可以打字：
+        1 of 2
+        测试题一：选哪种颜色？
+        › 1. 红色
+          2. 绿色
+          3. Other
+        enter submit   ^] skip   shift+→ main prompt   shift+← next question
+    返回 {"open": True, "left", "pos", "text": 题目那几行, "options": [(编号, 文字)], "cursor",
+    "first": 这是第一道（再按 shift+→ 就回主输入框）, "next": 后面还有（shift+← 下一道）}。只剩一道时没有「1 of 1」那行。"""
+    tail = [r.strip() for r in rows if r.strip()][-40:]
+    foot = next((i for i in range(len(tail) - 1, max(len(tail) - 4, -1), -1) if QBOX_FOOT_RE.search(tail[i])), None)
+    if foot is None:
+        near = tail[-14:]
+        for i, r in enumerate(near):
+            m = QCOUNT_RE.match(r)
+            if m and any("to answer" in x for x in near[i:i + 3]):
+                return {"open": False, "left": int(m.group(1))}
+        return None
+    opts, cursor, more, i = [], None, [], foot - 1
+    while i >= 0:                                        # 从底往上读选项；选项太长折行的，接到上面那一项后面
+        m = OPTION_RE.match(tail[i])
+        if m:
+            opts.insert(0, [int(m.group(1)), " ".join([m.group(2).strip()] + more)])
+            more = []
+            if tail[i].startswith("›"):
+                cursor = int(m.group(1))
+            if opts[0][0] == 1:
+                break
+        elif opts and not more:
+            more.insert(0, tail[i])
+        else:
+            break
+        i -= 1
+    if not opts or [n for n, _ in opts] != list(range(1, len(opts) + 1)):
+        return None
+    text, pos, left = [], 1, 1
+    for r in reversed(tail[max(0, i - 6):i]):
+        m = QPOS_RE.match(r)
+        if m:
+            pos, left = int(m.group(1)), int(m.group(2))
+            break
+        if r.startswith(("•", "›", "└", "─")):
+            break
+        text.insert(0, r)
+    footer = tail[foot]
+    return {"open": True, "left": left, "pos": pos, "text": " ".join(text), "options": [tuple(o) for o in opts], "cursor": cursor,
+            "first": "main prompt" in footer, "next": "next question" in footer}
+
+
+def asked_questions(path, size=4 << 20, answered=False):
+    """对话记录里它用 request_user_input 问你、还没收到回答的题，按问的先后：[{"call", "idx", "title", "options": [文字], "notes": [说明]}]。
+    answered=True 时返回 (没答的, 答了的)。
+    你在框里答的，作为一条「<send_user_message_question_reply>」消息写进对话记录（它在干活时要等它下一步才写进去）；
+    跳过（^]）的什么都不写——所以还要跟屏幕上剩几道对一下（open_questions）。"""
+    asked, done, sync = [], set(), {}
+    if not path or not os.path.exists(path):
+        return []
+    for line in _tail_lines(path, size):
+        if "request_user_input" not in line and "question_reply" not in line and not any(c in line for c, y in sync.items() if y):
+            continue                                     # 只解析跟提问有关的行（对话记录很大，每几秒就要看一次）
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        p = _payload(e)
+        kind = p.get("type")
+        if kind == "function_call" and str(p.get("name", "")).startswith("request_user_input"):
+            try:
+                args = json.loads(p.get("arguments") or "{}")
+            except ValueError:
+                continue
+            call = p.get("call_id") or ""
+            sync[call] = p["name"] == "request_user_input"           # 不带 _async 的：答完才回结果
+            for i, q in enumerate(args.get("questions") or []):
+                if not isinstance(q, dict):
+                    continue
+                opts = [o if isinstance(o, str) else (o or {}).get("label", "") for o in q.get("options") or []]
+                notes = ["" if isinstance(o, str) else (o or {}).get("description", "") for o in q.get("options") or []]
+                asked.append({"call": call, "idx": i, "title": q.get("title") or q.get("question") or q.get("header") or "",
+                              "options": opts, "notes": notes})
+        elif kind == "function_call_output" and sync.get(p.get("call_id")):
+            done |= {(q["call"], q["idx"]) for q in asked if q["call"] == p.get("call_id")}
+        elif kind == "message" and p.get("role") == "user" and QREPLY_TAG in _text(p):
+            body = _text(p).split(QREPLY_TAG, 1)[1].split("</send_user_message_question_reply>", 1)[0]
+            try:
+                items = json.loads(body)
+            except ValueError:
+                continue
+            for it in items if isinstance(items, list) else []:
+                try:
+                    _, call, idx = json.loads(it.get("questionItemId") or "[]")
+                    done.add((call, int(idx)))
+                except (ValueError, TypeError):
+                    continue
+    todo = [q for q in asked if (q["call"], q["idx"]) not in done]
+    return (todo, [q for q in asked if (q["call"], q["idx"]) in done]) if answered else todo
+
+
+def open_questions(s, rows):
+    """提问框里还开着的题。题目、选项从对话记录里取（屏幕上的可能折行、被截断），跟提问框对上：
+    已经在框里答了、排着队还没写进对话记录的（屏幕上有「› > 题目」那条回显）去掉；还多的（跳过的）只留最后几道。
+    没有提问框返回 None；对话记录里找不到题的，用屏幕上展开的那一道。返回 {"box", "questions"}。"""
+    box = question_box(rows)
+    if not box:
+        return None
+    shown = _norm("\n".join(rows))
+    todo, done = asked_questions(s.get("transcript"), answered=True)
+    extra = {}                                           # 屏幕上的回显比对话记录里的回答多几条：多的那几条是排着队、还没写进去的
+    for q in todo:
+        key = _norm(q["title"])
+        if key not in extra:
+            extra[key] = shown.count(">" + key) - sum(_norm(x["title"]) == key for x in done)
+    qs = []
+    for q in todo:
+        key = _norm(q["title"])
+        if extra[key] > 0:
+            extra[key] -= 1
+            continue
+        qs.append(q)
+    qs = qs[-box["left"]:] if box["left"] else qs        # 跳过的题对话记录里没有痕迹：只留最近的那几道
+    if not qs and box["open"]:
+        opts = [label for _, label in box["options"][:-1]]
+        qs = [{"call": "", "idx": 0, "title": box["text"], "options": opts, "notes": [""] * len(opts)}]
+    return {"box": box, "questions": qs}
+
+
+def answer_question(s, title, k=None, label="", text=None, wait=lambda: time.sleep(0.3)):
+    """在提问框里答一道题，像在电脑上一样按键；每按一下都重新看屏幕核对，对不上就停手，不乱按。
+    收起的先按 shift+← 打开 → 翻到这道题（shift+→ 往前、shift+← 往后）→ 核对第 k 项就是 label → 按数字键 k（选上并交上去）；
+    text 不为 None 时挪到最后的 Other，打这段字再回车。原来是收起的，答完还有别的题就按 shift+→ 收回主输入框。
+    返回 (成功, 没成功的原因)。"""
+    want = _norm(title)[:30]
+    hit = lambda b: bool(b and b["open"] and want and want in _norm(b["text"]))
+
+    def look(pred, n=10):
+        for _ in range(n):
+            b = question_box(pane_rows(s))
+            if b and pred(b):
+                return b
+            wait()
+        return None
+
+    box = question_box(pane_rows(s))
+    if not box:
+        return False, "屏幕上已经没有提问框了"
+    was_open = box["open"]
+    if not was_open:
+        crterm.key(s, "S-Left")
+        box = look(lambda b: b["open"])
+        if not box:
+            return False, "按 shift+← 没打开提问框"
+    for _ in range(box["left"] + 1):                     # 先往前翻（停在第一道或就是这道）
+        if box["first"] or hit(box):
+            break
+        pos = box["pos"]
+        crterm.key(s, "S-Right")
+        box = look(lambda b: b["open"] and b["pos"] != pos)
+        if not box:
+            return False, "往前翻题时提问框变了"
+    for _ in range(box["left"] + 1):                     # 再往后找
+        if hit(box) or not box["next"]:
+            break
+        pos = box["pos"]
+        crterm.key(s, "S-Left")
+        box = look(lambda b: b["open"] and b["pos"] != pos)
+        if not box:
+            return False, "往后翻题时提问框变了"
+    if not hit(box):
+        return False, "提问框里没找到这道题（可能已经答过或跳过了）"
+    opts = dict(box["options"])
+    last = max(opts)
+    if text is not None:
+        if opts[last] != "Other":
+            return False, f"最后一项不是 Other（屏幕上是「{opts[last]}」）"
+        k = last
+    elif k not in opts or k == last or _norm(opts[k]) != _norm(label):
+        return False, f"第 {k} 项对不上（屏幕上是「{opts.get(k, '')}」）"
+    if text is None and k <= 9:
+        crterm.literal(s, str(k))                        # 数字键：选上并直接交上去
+    else:
+        for _ in range(len(opts) + 1):                   # 光标一格格挪到第 k 项
+            cur = box["cursor"]
+            if cur == k:
+                break
+            crterm.key(s, "Down" if cur is None or cur < k else "Up")
+            box = look(lambda b: hit(b) and b["cursor"] != cur)
+            if not box:
+                return False, "挪光标时提问框变了"
+        if box["cursor"] != k:
+            return False, "光标没挪到这一项"
+        if text is not None:
+            crterm.literal(s, " ".join(text.split()))
+            if not look(lambda b: hit(b) and _norm(text)[:10] in _norm(dict(b["options"]).get(k, ""))):
+                return False, "Other 那一项里没看到打进去的字，没有交"
+        crterm.key(s, "Enter")
+    for _ in range(15):
+        wait()
+        box = question_box(pane_rows(s))
+        if not hit(box):
+            break
+    else:
+        return False, "按了键，这道题还在框里"
+    if not was_open:                                     # 原来在主输入框：还有别的题就收回去（第一道上按 shift+→ 回主输入框，别的是往前一道）
+        for _ in range(8):
+            if not box or not box["open"]:
+                break
+            pos = box["pos"]
+            crterm.key(s, "S-Right")
+            for _ in range(6):
+                wait()
+                box = question_box(pane_rows(s))
+                if not box or not box["open"] or box["pos"] != pos:
+                    break
+    return True, ""
 
 
 def menu(rows):

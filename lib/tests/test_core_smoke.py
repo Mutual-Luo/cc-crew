@@ -115,6 +115,23 @@ check("帮助文字", "助手" in str(crcore.Remote().handle("帮助")))
 check("问选哪个算拍板", crcore.is_decision("两个方案：\nA. 改成直观版\nB. 去掉这张图\n你选哪个？"))
 check("要你贴日志不算拍板", crcore.ask_kind("你把 nvidia-smi 的输出贴给我？")[0] == "info"
       and not crcore.is_decision("你把 nvidia-smi 的输出贴给我？"))
+# 「需要我按按钮的再叫我，其他的就是正常的消息」：只有能出按钮的两类（选 A/B/C、做不做）算拍板
+for text in ("我那几批评测把生产机拖慢了，已经降下来。window 1 也在盯，看到高了会告诉我。",       # 别人会告诉它，不是问你
+             "睡醒了。第 1 次是你要我回「睡醒了」，第 2 次是问这次测试叫什么。",               # 「什么」不是「要我…么」
+             "这个影响一致率，等 4 组都回来看实际一致率再决定要不要改说明。",                 # 它自己盘算
+             "那几句话的意思是：「老板，要不要我们家带实时签名的中转？」\n这是行话。",          # 引号里转述别人的话
+             "第一次打开时，它可能会让你选主题、问你要不要登录。",                           # 别人会问你
+             "还在等你确认 Method 部分。", "你想拿这些做什么？",                              # 开放问题：普通消息
+             "构建完成后会传到生产，但不切换；切换生产要等你同意。"):                         # 以后才要你同意，现在不是在问
+    check(f"不算拍板：{text[:16]}", not crcore.is_decision(text), crcore.ask_kind(text))
+for text, kind in (("按你之前的规矩，第一处可以只写 B。要改吗？", "yesno"), ("就按这个方案合吗？", "yesno"),
+                   ("改法是把标题缩短一行，你看行不行？", "yesno"), ("你说过不要我动它，所以这次等你点头再改。", "yesno"),
+                   ("最该做的是修红线问题。你同意的话，我现在就开始改。", "yesno"),
+                   ("this changes production config, so I need your approval.", "yesno"),
+                   ("三种改法：\n- **(a)** 扩写结论\n- **(b)** 加回删掉的内容\n- **(c)** 挪回一张图表\n\n你倾向哪种？", "options")):
+    check(f"算拍板（{kind}）：{text[:14]}", crcore.ask_kind(text)[0] == kind and crcore.is_decision(text), crcore.ask_kind(text))
+check("「(a) (b)」只是列了几处改动、问你行不行：是做不做，不是选项",
+      crcore.ask_kind("改了两处：\n(a) 纵轴标签挪进框里\n(b) 时间轴末尾挪开\n你看行不行？")[0] == "yesno")
 proj = os.path.join(CLAUDE_DIR, "projects", "p")
 os.makedirs(proj)
 with open(os.path.join(proj, "s.jsonl"), "w", encoding="utf-8") as f:   # 6 天里每天 10 点、22 点各说一句话

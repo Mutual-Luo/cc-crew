@@ -194,7 +194,7 @@ check("对话记录读到的和 heard.jsonl 记下的合起来不重复", len(cr
 check("你在终端里亲手打了字：算你醒着（夜里照常推）", r.state.get("seen_you") == T0 + 80)
 crcore.save_json(crcore.REGISTRY, {NAME: dict(E, status="busy", statusAt=T0 + 79)})
 board = r.status_card()
-check("看板：干活中的员工写上起因", "🟢 干活中" in board.text and "你 · 终端：这是一段很长的话" in board.text, board.text)
+check("看板：干活中的员工写上起因", "干活中 1" in board.text and "你 · 终端：这是一段很长的话" in board.text, board.text)
 import cragents  # noqa: E402
 snap = cragents.snapshot(r, crcore.load_json(crcore.REGISTRY, {}), with_pending=False)
 emp = next(x for x in snap["employees"] if x["name"] == NAME)
@@ -268,6 +268,21 @@ d = found.get("paper")
 check("停放的会话：跟着后台任务看状态和对话记录，终端还是 tmux 里那个", d and d["sessionId"] == SID and d["status"] == "busy"
       and d["pid"] == FRONT and d["jobPid"] == BACK and d["pane"] == "%17" and d["peer"] == "评测基准", d)
 check("后台任务自己不算一个员工", list(found) == ["paper"], list(found))
+import subprocess
+other = subprocess.Popen(["sleep", "60"])                  # 第二个后台任务：前台从原来那个切到了它（终端标题变成它的名字）
+crcore.save_json(os.path.join(sess, f"{other.pid}.json"), {"pid": other.pid, "sessionId": "fork-sid", "kind": "bg", "jobId": "e5f6a7b8",
+                                                           "status": "idle", "statusUpdatedAt": (T0 + 99) * 1000, "cwd": TMP, "name": "评测基准 ⑂"})
+attach0 = crcore.crterm.attach_info
+crcore.crterm.attach_info = lambda pid, d: dict(attach0(pid, d), title="✳ 评测基准 ⑂")
+moved = crcore.discover().get("paper")
+crcore.crterm.attach_info = lambda pid, d: dict(attach0(pid, d), title="✳ 评测基准")
+stay = crcore.discover().get("paper")
+crcore.crterm.attach_info = attach0
+other.kill()
+os.remove(os.path.join(sess, f"{other.pid}.json"))
+check("前台切到了另一个后台会话：跟着终端标题认，状态和对话记录换成它的", moved and moved["sessionId"] == "fork-sid"
+      and moved["jobPid"] == other.pid and moved["status"] == "idle" and moved["pane"] == "%17", moved)
+check("标题还是原来那个的名字：照旧认原来那个", stay and stay["sessionId"] == SID and stay["jobPid"] == BACK, stay)
 crcore.save_json(crcore.REGISTRY, {NAME: E, "paper": dict(d, alive=True)})
 peer_said = crcore.label_said(SID, [{"t": T0, "kind": "peer", "from": "评测基准", "pid": BACK, "text": "别重启"}])[0]
 check("后台任务发来的同事消息：认得出是哪个员工", peer_said["by"] == "paper", peer_said)
@@ -426,5 +441,218 @@ crcore.caller_name = real_caller
 rec = crcore._sent_tail()[-1]
 check("脚本直接调 crcore 发的：记成 cli + 哪个员工发的", rec["via"] == "cli" and rec["by"] == "crew-x", rec)
 crcore.VIA.update(via="feishu", by="")
+
+# 14. 看板：标题下一行摘要；按状态分组（等你 → 干活中 → 等后台 → 空闲），组之间细线，每人一行（彩色小标签 + 工号 名字 + 类型，右边时间），
+#     空闲的今天有新话才多一行，一天以上没动静的折成一行，下班一行只有名字，助手不列；底下下拉 + 〔看攒下的 N〕
+import re  # noqa: E402
+now_t = time.time()
+midnight = time.mktime(time.localtime()[:3] + (0, 0, 0, 0, 0, -1))
+base = {"agent": "claude", "alive": True, "cwd": TMP, "startedAt": now_t - 9000, "pid": os.getpid()}
+crcore.save_json(crcore.REGISTRY, {
+    "worker": dict(base, sessionId="s1", status="busy", statusAt=now_t - 60, startedAt=now_t - 9900),
+    "waiter": dict(base, sessionId="s2", status="shell", statusAt=now_t - 120, startedAt=now_t - 9800),
+    "asker": dict(base, sessionId="s3", status="waiting", waiting="permission prompt", statusAt=now_t - 30, startedAt=now_t - 9700),
+    "idle-new": dict(base, sessionId="s4", status="idle", statusAt=now_t - 40),
+    "idle-quiet": dict(base, sessionId="s5", status="idle", statusAt=now_t - 50),
+    "exp-old1": dict(base, sessionId="s6", status="idle", statusAt=now_t - 30 * 3600),
+    "exp-old2": dict(base, sessionId="s8", status="idle", statusAt=now_t - 50 * 3600),
+    "gone": dict(base, alive=False, died=now_t - 3600),
+    "助手": dict(base, sessionId="s7", status="idle", statusAt=now_t - 50)})
+crcore.save_json(crcore.BADGES, {})
+crcore.sync_badges(crcore.load_json(crcore.REGISTRY, {}))
+r = crcore.Remote()
+r.state["default"] = "助手"
+r.state["held"] = 17
+r.state["bg"] = {"worker": {"t": now_t - 900, "text": "上一轮的话"}, "waiter": {"t": now_t - 120, "text": "等评测跑完再看"},
+                 "idle-new": {"t": now_t - 40, "text": "压缩包打好了 在 /tmp/x.zip"},
+                 "idle-quiet": {"t": midnight - 3600, "text": "昨天说的话"},
+                 "exp-old1": {"t": now_t - 30 * 3600, "text": "很久以前的话"}}
+r.state["said_last"] = {}
+board = r.status_card()
+els = board.card["elements"]
+notes = [e["elements"][0]["content"] for e in els if e["tag"] == "note"]
+check("看板分组：等你 → 干活中 → 等后台 → 空闲，小标题带人数；空闲里久没动静的折一行，下班一行",
+      notes[:4] == ["等你 1", "干活中 1", "等后台 1", "空闲 4"] and notes[4].startswith("久没动静 2：")
+      and notes[5] == "下班 1：gone", notes)
+check("看板：组之间一条细线", [e["tag"] for e in els].count("hr") == 4, [e["tag"] for e in els])
+check("看板标题下面一行摘要：几人等你 · 干活 · 等后台 · 空闲（攒的条数不在这里）",
+      board.card["header"]["subtitle"]["content"] == "1 人等你 · 1 人干活 · 1 人等后台 · 4 人空闲", board.card["header"])
+blob = json.dumps(board.card, ensure_ascii=False)
+check("看板：不用表情和圆点，没有「醒来看了一眼」", not re.search("[⏸🟢🟡🌙🙋⏳●]", blob) and "醒来看了一眼" not in blob)
+sets = [e for e in els if e["tag"] == "column_set"]
+left = [c["columns"][0]["elements"][0]["content"] for c in sets]
+check("看板：助手不在列表里", not any("助手" in x for x in left)
+      and "#enter 助手" not in json.dumps(els[-2], ensure_ascii=False), left)
+check("看板：状态是彩色小标签（干活中绿、等后台橙、等你红），空闲的不加",
+      left[0].startswith("<text_tag color='red'>等你</text_tag> ") and left[1].startswith("<text_tag color='green'>干活中</text_tag> ")
+      and left[2].startswith("<text_tag color='orange'>等后台</text_tag> ") and "text_tag color='green'" not in left[3]
+      and re.match(r"\d+号 \*\*", left[3]), left)
+check("看板：每组左右两栏行数一样（时间跟名字对齐）", all(len(c["columns"][0]["elements"][0]["content"].split("\n"))
+                                              == len(c["columns"][1]["elements"][0]["content"].split("\n")) for c in sets))
+check("看板：空闲的今天有新话才多一行，昨天的话不写", "压缩包打好了" in left[3] and "昨天说的话" not in left[3]
+      and len(left[3].split("\n")) == 3, left[3])
+check("看板：一天以上没动静的不单独列，折成一行（带工号，都叫 exp-xxx 的只写 xxx）",
+      "old1" not in left[3] and re.fullmatch(r"久没动静 2：\d+号 old1、\d+号 old2", notes[4]), notes[4])
+check("看板：干活、等后台、等你的下面一行最新一句", "上一轮的话" in left[1] and "等评测跑完再看" in left[2] and "要你批准" in left[0])
+times = [c["columns"][1]["elements"][0]["content"] for c in sets]
+check("看板：时间今天写 HH:MM", all(re.search(r"\d\d:\d\d", t) for t in times), times)
+check("看板：每行放得下（手机上不折行）", all(crcore.text_em(re.sub(r"<[^>]+>|\*\*", "", x)) <= crcore.LINE_EM - 3
+                                     for x in "\n".join(left).split("\n"))
+      and all(crcore.text_em(n) <= crcore.NOTE_EM for n in notes))
+bar = [e for e in els if e["tag"] == "action"][-1]["actions"]
+check("看板底下：「选员工」下拉（下班的也在）+ 〔看攒下的 17〕，其余在「···」", bar[0]["tag"] == "select_static"
+      and bar[0]["placeholder"]["content"] == "选员工" and "#enter gone" in [o["value"] for o in bar[0]["options"]]
+      and [b["text"]["content"] for b in bar[1:-1]] == ["看攒下的 17"] and bar[-1]["tag"] == "overflow"
+      and "#board now" in [o["value"] for o in bar[-1]["options"]], bar)
+r.state["held"] = 0
+bar = [e for e in r.status_card().card["elements"] if e["tag"] == "action"][-1]["actions"]
+check("没攒消息：下拉 + 〔刷新〕", [b["text"]["content"] for b in bar[1:-1]] == ["刷新"], bar)
+check("看板文字版（命令行）第二行是摘要", board.text.split("\n")[1] == "1 人等你 · 1 人干活 · 1 人等后台 · 4 人空闲", board.text)
+keep_reg = crcore.load_json(crcore.REGISTRY, {})
+three = now_t - 3 * 86400
+crcore.save_json(crcore.REGISTRY, {"y1": dict(base, status="idle", statusAt=max(midnight - 60, now_t - 23 * 3600)),
+                                   "w3": dict(base, status="shell", statusAt=three)})
+times = "".join(c["columns"][1]["elements"][0]["content"] for c in crcore.Remote().status_card().card["elements"] if c["tag"] == "column_set")
+lt = time.localtime(three)
+check("看板时间：昨天写「昨天」，更早写 月/日", "昨天" in times and f"{lt.tm_mon}/{lt.tm_mday}" in times, times)
+crcore.save_json(crcore.REGISTRY, keep_reg)
+again = r.handle("#board now")
+check("〔刷新〕：看板原地换成最新的", getattr(again, "in_place", False) and again.slot == "status")
+r.note_latest("x", now_t, "压缩包打好了：\n/tmp/x.zip，3 个文件")
+check("最新一句只是个引子（以冒号结尾）：接上下一行", r.state["bg"]["x"]["text"] == "压缩包打好了： /tmp/x.zip，3 个文件", r.state["bg"]["x"])
+r.note_latest("y", now_t, "")
+check("没说话：最新一句记成空，不写「醒来看了一眼」", r.state["bg"]["y"]["text"] == "")
+
+# 15. 工号：只给在上班的；下班就收回，回来 / 新来的取最小空号，在班的号码不变；整理一次排成 1～N，旧号再认一天
+reg = {n: dict(base, startedAt=now_t - 100 * i) for i, n in enumerate(["a", "b", "c", "d"], 1)}
+reg["助手"] = dict(base)
+crcore.save_json(crcore.BADGES, {"a": 3, "b": 1, "c": 7, "old": 2, "gone-long": 4})
+reg["gone-long"] = dict(base, alive=False, died=now_t - 3600)
+reg["blink"] = dict(base, alive=False, died=now_t - 30)
+crcore.save_json(crcore.BADGES, dict(crcore.load_json(crcore.BADGES, {}), blink=5))
+got = crcore.sync_badges(reg)
+check("工号：在班的号码不动；下班久了的收回；刚断一下的（重启）先留着；新来的取最小空号；助手不占号",
+      got == {"a": 3, "b": 1, "c": 7, "blink": 5, "d": 2}, got)
+crcore.release_badge("c")
+reg["c"] = dict(base, alive=False, died=now_t)
+check("「下班」：工号马上收回，别人的号不动", crcore.sync_badges(reg) == {"a": 3, "b": 1, "blink": 5, "d": 2})
+reg["c"] = dict(base, startedAt=now_t)
+check("上班回来：取最小的空号", crcore.sync_badges(reg)["c"] == 4)
+reg["dead-pid"] = dict(base, pid=99999999, startedAt=now_t)
+check("进程其实已经没了（注册表还没更新）：不分号", "dead-pid" not in crcore.sync_badges(reg))
+reg.pop("dead-pid")
+
+reg = {"paper:1": dict(base), "forcing": dict(base), "crew": dict(base), "paper:0": dict(base), "test": dict(base),
+       "off": dict(base, alive=False, died=now_t - 7200), "助手": dict(base)}
+crcore.save_json(crcore.BADGES, {"forcing": 1, "off": 2, "crew": 3, "test": 6, "paper:0": 10, "paper:1": 11})
+crcore.save_json(crcore.REGISTRY, reg)
+r = crcore.Remote()
+old, new = crcore.renumber_badges(r.state, ["forcing", "paper:0", "paper:1", "crew"], reg)
+check("整理工号：在班的按项目排成连续的 1～N（没写到的接在后面），下班的、助手不占号",
+      new == {"forcing": 1, "paper:0": 2, "paper:1": 3, "crew": 4, "test": 5}, new)
+check("整理工号：旧号记一天（只记换了人的）", r.state["renum"]["old"] == {"2": "off", "3": "crew", "6": "test", "10": "paper:0", "11": "paper:1"},
+      r.state["renum"])
+r.save()
+sent = []
+
+
+def fake_deliver(target, body, reg, urgent=False):          # 真的 deliver 也是先 resolve 再发
+    name, _, err = r.resolve(target, reg)
+    if err:
+        return err
+    sent.append((name, body))
+    return crcore.Card({}, "OK")
+
+
+r.deliver = fake_deliver
+real_discover, crcore.discover = crcore.discover, lambda: {n: dict(e) for n, e in reg.items() if e.get("alive")}
+crcore.VIA.update(via="cli", by="")
+out = r.handle("@11 接着做")
+check("cr 里用旧号（这个号现在没人用）：照旧发给原来那个人，回复前面提醒「11号现在是3号」",
+      sent[-1] == ("paper:1", "接着做") and str(out).split("\n")[1].startswith("ℹ️ 11号现在是3号（paper:1）"), (sent, str(out)))
+sent.clear()
+out = r.handle("@3 接着做")
+check("cr 里用的号新旧两个人都在上班：不执行，说清楚现在的 3号是谁、原来的 3号现在几号",
+      not sent and "3号换人了" in str(out) and "现在的 3号是 paper:1" in str(out) and "原来的 3号 crew 现在是 4号" in str(out), str(out))
+out = r.handle("@2 在吗")
+check("旧号原来那个人下班了：新号照常用，不问也不提醒", sent[-1] == ("paper:0", "在吗") and "ℹ️" not in str(out), (sent, str(out)))
+crcore.VIA.update(via="feishu", by="")
+sent.clear()
+ask = r.handle("@3 帮我看看", typed=True)
+check("飞书里 @ 的号新旧两个人都在上班：先问发给谁（两个按钮），这句还没发",
+      not sent and "3号换人了" in ask.text and ["#renum 0", "#renum 1"] == [b["value"]["cmd"] for e in ask.card["elements"]
+                                                                       if e["tag"] == "action" for b in e["actions"]], ask.text)
+r.handle("#renum 1")
+check("点〔原 3号〕：发给原来的 3号", sent[-1] == ("crew", "帮我看看") and not r.state["renum"].get("new_ok"), sent)
+check("这句已经发了：再点一次不重发", "处理过了" in str(r.handle("#renum 1")) and len(sent) == 1)
+ask = r.handle("@3 你好", typed=True)
+check("没点过新号：下次 @ 换了人的号还问", len(sent) == 1 and "3号换人了" in ask.text)
+r.handle("#renum 0")
+check("点〔新号〕：发给现在的 3号，记住你已经换用新号", sent[-1] == ("paper:1", "你好") and r.state["renum"]["new_ok"])
+r.handle("@3 继续", typed=True)
+check("换用新号以后：@ 新号直接发，不再问", sent[-1] == ("paper:1", "继续"), sent)
+out = r.handle("@11 看下", typed=True)
+check("飞书里用旧号（现在没人用）：发给原来那个人，卡片下面跟一句「11号现在是3号」",
+      sent[-1] == ("paper:1", "看下") and out.more and str(out.more[-1]).startswith("ℹ️ 11号现在是3号"), (sent, out.more))
+r.state["renum"]["t"] -= crcore.RENUM_SECS + 1
+r.save()
+n = len(sent)
+r.handle("@11 看下", typed=True)
+check("过了一天：旧号不认了（11 号没人：不直接发，交给秘书）", len(sent) == n, sent)
+crcore.VIA.update(via="cli", by="")
+check("过了一天：cr 里旧号也不认了", "没有找到" in str(r.handle("@11 看下")) and len(sent) == n)
+crcore.VIA.update(via="feishu", by="")
+crcore.discover = real_discover
+# 16. 它忙时你又发了一句（排队，上一句答完才轮到）：回复卡片两轮的回答都要有；按钮行在手机上横排
+q1 = {"t": 1, "kind": "human", "text": "明天北京会下雨吗", "images": 0}
+q2 = {"t": 2, "kind": "human", "text": "看着和卡了一样", "images": 1, "queued": True}
+mid = {"t": 3, "kind": "human", "text": "顺便看下日志", "images": 0, "mid": True}
+two = [("said", q1, None), ("think", ("", 2), True), ("text", "会，下午有小雨。", True),
+       ("said", q2, None), ("text", "不是我卡了，是卡片没更新。", True)]
+got = crcore.turn_answers(two)
+check("排队的第二句是新的一轮：两轮的回答都留下、各对上自己问的那句",
+      [(qs[0]["text"], a) for qs, a in got] == [("明天北京会下雨吗", "会，下午有小雨。"), ("看着和卡了一样", "不是我卡了，是卡片没更新。")], got)
+one = [("said", q1, None), ("text", "我先查一下。", True), ("said", mid, None), ("tool", ("🌐 上网搜", "x", 1), True), ("text", "查到了：是。", True)]
+check("干活时插的话不算新的一轮：还是只有一个回答（不把「我先查一下」当回答）",
+      [a for _, a in crcore.turn_answers(one)] == ["查到了：是。"], crcore.turn_answers(one))
+check("连发两句、它一起答（第一句后面没写话）：算一轮", len(crcore.turn_answers([("said", q1, None), ("said", q2, None), ("text", "答。", True)])) == 1)
+bg = {"t": 4, "kind": "background", "text": 'Monitor "Wait for the web image build to finish"', "images": 0}
+check("后台任务的通知那一轮：不写成「答「Monitor …」」，你问的照旧「答「…」」",
+      crcore.turn_label([bg]) == "<font color='grey'>后台任务有结果后：</font>\n"
+      and "答「看着和卡了一样」" in crcore.turn_label([bg, q2]) and crcore.turn_label([]) == "", crcore.turn_label([bg]))
+card = crcore._card("💬【x】", "green", [{"tag": "action", "actions": []}, {"tag": "action", "layout": "bisected", "actions": []}])
+check("按钮行没指定排法的一律 flow（手机上不再一个按钮占一整行），指定了的不动",
+      [e.get("layout") for e in card["elements"] if e["tag"] == "action"][:2] == ["flow", "bisected"], card["elements"])
+
+# 17. 答完以后你发了 /model（菜单开着）：回复照常发，不当成它在问你；屏幕卡片每行写全；菜单选完直接说结果
+MENU = ["Select model", "Switch between Claude models.", "", "1. Default (recommended)  Opus 5.5 · Best for everyday",
+        "2. Opus 5.5               For complex work", "❯ 3. Sonnet 5.5 ✔           Most efficient", "", "Enter to confirm · Esc to exit"]
+crcore.pane_rows = lambda s: list(MENU)
+on_menu = dict(E3, status="waiting", waiting="?", statusAt=T1 + 71)
+real_discover, crcore.discover = crcore.discover, lambda: {N3: dict(on_menu)}
+r = crcore.Remote()
+r.state["remote_pending"] = {N3: T1 + 60}
+r.save()
+out = r.live_updates([N3])
+check("停在你自己打开的 /model 菜单上：这一轮的回复照常发（不是「要你批准」、不贴屏幕）",
+      out and out[0][2] and "按钮也改小了" in out[0][1].text and "批准" not in out[0][1].text and "屏幕" not in out[0][1].text,
+      [(n, getattr(c, "text", c)[:120], f) for n, c, f in out])
+crcore.discover = real_discover
+long = "长" * 80
+cleaned = crcore.clean_screen(["❯ 帮我推荐几个播客", "Thought for 11s", "● " + long, "❯ 1. Yes", "  2. No"])
+check("屏幕卡片：每行写全不截断、「Thought for」去掉、你说的话写成「你：」、菜单光标那行不动",
+      "• " + long in cleaned and "Thought" not in cleaned and cleaned.startswith("你：帮我推荐几个播客") and "❯ 1. Yes" in cleaned, cleaned)
+DONE = ["你要是想先挑一个开始，我选张小珺。", "❯ /model", "⎿  Set model to Opus 5.5 for this session only",
+        "✔ Update installed · /restart to apply", "─" * 40, "❯", "─" * 40, "Opus 5.5 · medium · ctx 13%"]
+crcore.pane_rows = lambda s: list(DONE)
+card = crcore.Remote().menu_done_card(N3, E3)
+check("菜单里选完：直接说结果「已切到 Opus 5.5」，不贴整屏", card is not None and "已切到 Opus 5.5（只对这次对话）" in card.text
+      and "张小珺" not in card.text, getattr(card, "text", None))
+crcore.pane_rows = lambda s: ["❯ /model", "⎿  Set model to Opus 5.5", "❯ 接着说", "好的。", "─" * 40, "❯", "─" * 40]
+check("最近一句不是斜杠命令：不当成菜单结果（照常给屏幕卡片）", crcore.Remote().menu_done_card(N3, E3) is None)
+crcore.pane_rows = lambda s: []
+tags = crcore.usage_tags({"model": "Opus 5.5", "effort": "xhigh", "ctx": 12})
+check("底栏标签：模型后面跟着思考程度「思考 很高」", "Opus 5.5" in tags and "思考 很高" in tags
+      and tags.index("Opus 5.5") < tags.index("思考 很高") < tags.index("上下文 12%"), tags)
 
 print(f"\n全部通过：{len(passed)} 项")

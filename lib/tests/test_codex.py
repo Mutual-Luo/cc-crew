@@ -109,6 +109,239 @@ check("窗格标题：会话 id、等你批准、转圈", crcodex._title_info("[
       == ("01a176fa-1524-7173-b0b9-818d0", True, False)
       and crcodex._title_info("01a1765b-e775-78b2-89c9-22007... ⠹ 联系 | speculative")[2])
 
+# ---------------------------------------------------------------- 一次问你几道题（request_user_input 提问框）
+QFOLD = """• Working (24s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close
+• Queued follow-up inputs
+  ? 3 questions · 19s
+    shift+← to answer
+› Ask Codex to do anything
+  GPT-6.1-Sol high""".splitlines()
+QOPEN = """• Queued follow-up inputs
+  1 of 3
+  测试题一：选哪种颜色？
+  › 1. 红色
+    2. 绿色
+    3. 蓝色
+    4. Other
+  enter submit   ^] skip   shift+→ main prompt   shift+← next question""".splitlines()
+QLAST = """› > 测试题二：选哪个数字？
+  自定义七
+• Queued follow-up inputs
+  测试题三：要继续吗？
+  › 1. 继续
+    2. 停止
+    3. Other
+  enter submit   ^] skip   shift+→ main prompt""".splitlines()
+b = crcodex.question_box([r.strip() for r in QFOLD])
+check("提问框收起时：认出还剩几道", b == {"open": False, "left": 3}, b)
+b = crcodex.question_box([r.strip() for r in QOPEN])
+check("提问框展开时：题目、选项、光标、能往后翻", b and b["text"] == "测试题一：选哪种颜色？" and b["options"][-1] == (4, "Other")
+      and b["cursor"] == 1 and b["first"] and b["next"] and (b["pos"], b["left"]) == (1, 3), b)
+b = crcodex.question_box([r.strip() for r in QLAST])
+check("只剩一道：没有「1 of 1」，上面的回显不算题目", b and b["text"] == "测试题三：要继续吗？" and b["left"] == 1 and not b["next"], b)
+check("提问框不是菜单、不是批准框", crcodex.menu([r.strip() for r in QOPEN]) is None and crcodex.dialog([r.strip() for r in QOPEN]) is None)
+wrap = [r.strip() for r in QOPEN[:3]] + ["› 1. 有公网服务器，可以中转，而且这一项写得特别长特别长", "折到第二行", "2. 都没有", "3. Other",
+                                         QOPEN[-1].strip()]
+check("选项太长折行：接到那一项后面", crcodex.question_box(wrap)["options"][0] == (1, "有公网服务器，可以中转，而且这一项写得特别长特别长 折到第二行"))
+check("普通屏幕没有提问框", crcodex.question_box(["• Working (3s • esc to interrupt)", "› Ask Codex to do anything"]) is None)
+
+QR = "<send_user_message_question_reply>\n{}\n</send_user_message_question_reply>"
+reply = lambda call, i, q, a: {"timestamp": "2026-10-31T02:12:41.522Z", "type": "response_item", "payload": {
+    "type": "message", "role": "user", "content": [{"type": "input_text", "text": QR.format(json.dumps(
+        [{"answer": a, "question": q, "questionItemId": json.dumps(["request_user_input_async", call, i])}], ensure_ascii=False))}]}}
+ask = lambda call, qs, name="request_user_input_async": {"timestamp": "2026-10-31T02:07:38.527Z", "type": "response_item", "payload": {
+    "type": "function_call", "name": name, "call_id": call, "arguments": json.dumps({"questions": qs}, ensure_ascii=False)}}
+QPATH = os.path.join(TMP, "rollout-q.jsonl")
+with open(QPATH, "w", encoding="utf-8") as f:
+    for rec in [ask("call_old", [{"title": "测试题二：选哪个数字？", "options": ["一", "二"]}, {"title": "旧的跳过了", "options": ["是", "否"]}]),
+                reply("call_old", 0, "测试题二：选哪个数字？", "二"),
+                ask("call_sync", [{"question": "计划模式的题", "options": [{"label": "A", "description": "说明 A"}]}], "request_user_input"),
+                {"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_sync", "output": "{}"}},
+                ask("call_new", [{"title": "测试题一：选哪种颜色？", "options": ["红色", "绿色", "蓝色"]},
+                                 {"title": "测试题二：选哪个数字？", "options": ["一", "二", "三", "四", "五", "六"]},
+                                 {"title": "测试题三：要继续吗？", "options": ["继续", "停止"]}]),
+                reply("call_new", 0, "测试题一：选哪种颜色？", "蓝色")]:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+todo = crcodex.asked_questions(QPATH)
+check("对话记录里没答的题：回答过的、计划模式答完的去掉，跳过的还在（记录里没痕迹）",
+      [(q["call"], q["idx"]) for q in todo] == [("call_old", 1), ("call_new", 1), ("call_new", 2)], todo)
+check("回答在卡片上显示成人话", crcodex.readable(reply("c", 0, "要继续吗？", "继续")["payload"]["content"][0]["text"]) == "回答「要继续吗？」：继续")
+screen = ["› > 测试题二：选哪个数字？", "二", "› > 测试题一：选哪种颜色？", "蓝色", "• Queued follow-up inputs", "? 2 questions", "shift+← to answer"]
+oq = crcodex.open_questions({"transcript": QPATH}, screen)
+check("还开着的题：同名的旧回答不算新回答，跳过的旧题按屏幕上的数目丢掉", [q["title"] for q in oq["questions"]] == ["测试题二：选哪个数字？", "测试题三：要继续吗？"], oq)
+screen2 = ["↳ > 测试题二：选哪个数字？", "五"] + screen
+oq = crcodex.open_questions({"transcript": QPATH}, screen2[:2] + screen[:4] + ["? 1 question", "shift+← to answer"])
+check("刚在框里答了、排着队还没写进记录的（↳ > 题目）也去掉", [q["title"] for q in oq["questions"]] == ["测试题三：要继续吗？"], oq)
+pt, _ = crcodex.waiting_on({"transcript": QPATH}, screen)
+check("waiting_on：提问框算「在问你」，带上题目", pt["name"] == "CodexQuestions" and pt["input"]["left"] == 2 and pt["id"] == "qcall_new"[-9:])
+
+
+class FakeBox:
+    """模拟 codex 的提问框：收起 / 展开、shift+← / shift+→ 翻题、数字键选上就交、Other 打字、回车。"""
+    def __init__(self, qs, open_at=None):
+        self.qs, self.open, self.pos, self.cursor, self.typed, self.answers, self.keys = [list(q) for q in qs], open_at is not None, open_at or 0, 1, "", [], []
+
+    def rows(self, s=None, ansi=False):
+        if not self.qs:
+            return ["• Working (1m 2s • esc to interrupt)", "› Ask Codex to do anything"]
+        if not self.open:
+            return ["• Queued follow-up inputs", f"? {len(self.qs)} questions · 5s", "shift+← to answer", "› Ask Codex to do anything"]
+        t, opts = self.qs[self.pos]
+        out = ["• Queued follow-up inputs"] + ([f"{self.pos + 1} of {len(self.qs)}"] if len(self.qs) > 1 else []) + [t]
+        out += [("› " if k == self.cursor else "") + f"{k}. {o}" for k, o in enumerate(opts + [self.typed or "Other"], 1)]
+        return out + ["enter submit   ^] skip   " + ("shift+→ main prompt" if self.pos == 0 else "shift+→ prev question")
+                      + ("   shift+← next question" if self.pos < len(self.qs) - 1 else "")]
+
+    def submit(self, k):
+        t, opts = self.qs.pop(self.pos)
+        self.answers.append((t, (opts + [self.typed])[k - 1]))
+        self.typed, self.cursor, self.pos = "", 1, min(self.pos, max(len(self.qs) - 1, 0))
+        self.open = self.open and bool(self.qs)
+
+    def key(self, s, name):
+        self.keys.append(name)
+        n = len(self.qs[self.pos][1]) + 1 if self.qs and self.open else 0
+        if name == "S-Left":
+            if not self.open:
+                self.open, self.pos, self.cursor = True, 0, 1
+            elif self.pos < len(self.qs) - 1:
+                self.pos, self.cursor = self.pos + 1, 1
+        elif name == "S-Right":
+            self.open, self.pos, self.cursor = (self.open and self.pos > 0), max(self.pos - 1, 0), 1
+        elif name in ("Down", "Up"):
+            self.cursor = max(1, min(n, self.cursor + (1 if name == "Down" else -1)))
+        elif name == "Enter":
+            self.submit(self.cursor)
+
+    def literal(self, s, text):
+        self.keys.append(text)
+        n = len(self.qs[self.pos][1]) + 1
+        if len(text) == 1 and text.isdigit():
+            if int(text) < n:
+                self.submit(int(text))
+            elif int(text) == n:
+                self.cursor = n
+        elif self.cursor == n:
+            self.typed += text
+
+
+def run_box(box, *a, **kw):
+    saved = crcodex.pane_rows, crcodex.crterm.key, crcodex.crterm.literal
+    crcodex.pane_rows, crcodex.crterm.key, crcodex.crterm.literal = box.rows, box.key, box.literal
+    try:
+        return crcodex.answer_question({}, *a, wait=lambda: None, **kw)
+    finally:
+        crcodex.pane_rows, crcodex.crterm.key, crcodex.crterm.literal = saved
+
+
+THREE = [("测试题一：选哪种颜色？", ["红色", "绿色", "蓝色"]), ("测试题二：选哪个数字？", ["一", "二", "三", "四", "五", "六"]),
+         ("测试题三：要继续吗？", ["继续", "停止"])]
+box = FakeBox(THREE)
+check("答第二道：打开 → 下一道 → 数字键 → 收回主输入框", run_box(box, "测试题二：选哪个数字？", 5, "五") == (True, "")
+      and box.answers == [("测试题二：选哪个数字？", "五")] and box.keys == ["S-Left", "S-Left", "5", "S-Right", "S-Right"] and not box.open, box.keys)
+box = FakeBox(THREE)
+check("打字回答：挪到 Other、打字、回车", run_box(box, "测试题一：选哪种颜色？", text="都 不要") == (True, "")
+      and box.answers == [("测试题一：选哪种颜色？", "都 不要")] and box.keys[:5] == ["S-Left", "Down", "Down", "Down", "都 不要"] and not box.open, box.keys)
+box = FakeBox(THREE)
+check("选项对不上就不按", run_box(box, "测试题一：选哪种颜色？", 2, "紫色")[0] is False and box.answers == [] and "2" not in box.keys)
+box = FakeBox(THREE)
+check("题已经不在框里就不按", run_box(box, "测试题四：没有这道", 1, "x")[0] is False and box.answers == []
+      and not any(k.isdigit() for k in box.keys))
+box = FakeBox(THREE, open_at=2)
+check("你在电脑上已经翻到第三道：往前翻到第一道再答，不替你收起", run_box(box, "测试题一：选哪种颜色？", 1, "红色") == (True, "")
+      and box.answers == [("测试题一：选哪种颜色？", "红色")] and box.keys[:2] == ["S-Right", "S-Right"] and box.open, box.keys)
+box = FakeBox([("十个选项", [str(i) for i in range(1, 11)])])
+check("第 10 项以上：挪光标再回车", run_box(box, "十个选项", 10, "10") == (True, "") and box.answers == [("十个选项", "10")]
+      and box.keys[-1] == "Enter" and box.keys.count("Down") == 9, box.keys)
+
+
+# 卡片：题目一行粗体 + 选项按钮（短的两三个一行、长的一个一行、多的下拉），不贴屏幕
+QS15 = [{"call": "call_demo1234abcd", "idx": 0, "title": "测试题一：有没有能用来中转的公网服务器？",
+         "options": ["有公网服务器，可以中转", "有域名或 Cloudflare，但没有公网服务器", "都没有，希望你推荐最省事的方案"], "notes": ["", "", ""]},
+        {"call": "call_demo1234abcd", "idx": 1, "title": "你平时从什么设备连接这台服务器？", "options": ["Mac", "Windows", "Linux"], "notes": ["", "", ""]},
+        {"call": "call_demo1234abcd", "idx": 2, "title": "选哪个数字？", "options": list("一二三四五六"), "notes": [""] * 6}]
+QB = {"id": "q47e57b10", "name": "CodexQuestions", "input": {"questions": QS15, "left": 3}}
+rq = crcore.Remote()
+QS_E = {"agent": "codex", "waiting": "questions", "status": "waiting", "statusAt": time.time() - 30, "sessionId": "", "alive": True}
+rq.state.pop("cxq", None)
+qcard = rq.codex_q_card("cx-crew", {"agent": "codex"}, QB)
+els = qcard.card["elements"]
+acts = [e for e in els if e["tag"] == "action"]
+check("提问卡片：长选项一个一行、短的三个一行、六个的下拉", [a.get("layout") for a in acts[:5]] == ["default", "default", "default", "trisection", "flow"]
+      and acts[4]["actions"][0]["tag"] == "select_static" and len(acts[4]["actions"][0]["options"]) == 6, [a.get("layout") for a in acts])
+check("提问卡片：按钮命令是「第几道题选第几项」", acts[3]["actions"][1]["value"]["cmd"] == "#cxq cx-crew 1234abcd 1 2"
+      and acts[4]["actions"][0]["options"][4]["value"] == "#cxq cx-crew 1234abcd 2 5")
+check("提问卡片：不贴屏幕，标题写几道题", "Exited" not in json.dumps(els, ensure_ascii=False) and "3 道题" in qcard.card["header"]["title"]["content"]
+      and qcard.ask_id == "q47e57b10")
+saved = crcore.waiting_on, crcodex.answer_question, crcore.note_sent
+pressed, open_now = [], list(QS15)
+crcore.waiting_on = lambda s, pt=None: ({"id": "q47e57b10", "name": "CodexQuestions", "input": {"questions": list(open_now), "left": len(open_now)}}, []) if open_now else None
+
+
+def fake_answer(s, title, k=None, label="", text=None):
+    pressed.append((title, k, label, text))
+    open_now[:] = [q for q in open_now if q["title"] != title]
+    return True, ""
+
+
+crcodex.answer_question = fake_answer
+crcore.note_sent = lambda s, text, files=0: pressed.append(("sent", text))
+try:
+    out = rq.codex_pick("cx-crew", QS_E, "1234abcd", "1", "2")
+    body = json.dumps(out.card, ensure_ascii=False)
+    win = [b for e in out.card["elements"] if e["tag"] == "action" for b in e["actions"] if b.get("text", {}).get("content") == "Windows"][0]
+    check("点了 Windows：只在卡片上选上，不按键；按钮蓝色实心、题目后面「已选」", not pressed and out.in_place and win["type"] == "primary_filled"
+          and "已选：Windows" in body and "提交已选的 1 道" in body, pressed)
+    out = rq.codex_pick("cx-crew", QS_E, "1234abcd", "1", "3")
+    body = json.dumps(out.card, ensure_ascii=False)
+    check("选错了再点别的：改成 Linux", "已选：Linux" in body and "已选：Windows" not in body and not pressed)
+    out = rq.codex_pick("cx-crew", QS_E, "1234abcd", "2", "5")
+    sel = [a for e in out.card["elements"] if e["tag"] == "action" for a in e["actions"] if a["tag"] == "select_static"][0]
+    check("下拉选完：框里显示选中的", sel.get("initial_option") == "#cxq cx-crew 1234abcd 2 5" and "已选：10022" not in json.dumps(out.card, ensure_ascii=False)
+          and "已选：五" in json.dumps(out.card, ensure_ascii=False))
+    out = rq.codex_submit("cx-crew", QS_E)
+    body = json.dumps(out.card, ensure_ascii=False)
+    check("〔提交〕：按顺序交选好的两道，交了的收成「你的回答」，没选的还在", [x[:2] for x in pressed if x[0] != "sent"] == [(QS15[1]["title"], 3), (QS15[2]["title"], 5)]
+          and ("sent", "回答「你平时从什么设备连接这台服务器？」：Linux") in pressed and "你的回答：Linux" in body and "你的回答：五" in body
+          and "有公网服务器，可以中转" in body and "提交" not in body.split("你的回答：五")[1].split("看屏幕")[0] and out.in_place, pressed)
+    check("还剩一道：标题写在问你", "在问你" in out.card["header"]["title"]["content"])
+    pressed.clear()
+    stale = rq.codex_pick("cx-crew", QS_E, "deadbeef", "0", "1")
+    check("旧卡片上的题已经过去了：不按键", not pressed and "过去了" in stale.card["header"]["title"]["content"])
+    out = rq.codex_pick("cx-crew", QS_E, None, None, None, text="  先 别 中转 ")
+    body = json.dumps(out.card, ensure_ascii=False)
+    check("打字：直接交给还开着的第一道（填进 Other）", pressed[0] == (QS15[0]["title"], None, "", "  先 别 中转 ") and pressed[1][1].endswith("：先 别 中转"), pressed)
+    check("全交完：标题「已回答」，每道题一行「你的回答」，没有选项按钮", "已回答" in out.card["header"]["title"]["content"]
+          and body.count("你的回答：") == 3 and "Windows" not in body and out.card["header"]["template"] == "grey", out.card["header"])
+finally:
+    crcore.waiting_on, crcodex.answer_question, crcore.note_sent = saved
+
+
+# 打字：你在飞书上打的当回答；秘书 / 同事用 cr 转来的照常发进主输入框（提问框展开着就先不发）
+sent_txt, picked = [], []
+saved = crcore.pane_rows, crcore.send_text, rq.resolve, rq.codex_pick, rq.live_card, rq.ask_card
+crcore.send_text = lambda s, text, files=(): sent_txt.append(text)
+rq.resolve = lambda target, reg, want_alive=True: ("cx-crew", dict(QS_E, pid=1), None)
+rq.codex_pick = lambda name, s, call, idx, k, text=None: picked.append(text) or crcore.Card({}, "picked")
+rq.live_card = lambda name, s, since: crcore.Card({}, "live")
+rq.ask_card = lambda name, s, *a, **kw: crcore.Card({}, "ask:" + kw.get("note", ""))
+try:
+    crcore.pane_rows = lambda s: [r.strip() for r in QFOLD]
+    crcore.VIA.update(via="feishu", by="")
+    rq.deliver("cx-crew", "都没有", {})
+    check("飞书上打的字：当第一道题的回答，不往主输入框里发", picked == ["都没有"] and not sent_txt, (picked, sent_txt))
+    crcore.VIA.update(via="", by="")
+    rq.deliver("cx-crew", "秘书转来的：先看日志", {})
+    check("cr 转来的话、提问框收起着：照常发进主输入框，不当回答", sent_txt == ["秘书转来的：先看日志"] and picked == ["都没有"], (picked, sent_txt))
+    crcore.pane_rows = lambda s: [r.strip() for r in QOPEN]
+    out = rq.deliver("cx-crew", "又一句", {})
+    check("cr 转来的话、提问框正开着：先不发", sent_txt == ["秘书转来的：先看日志"] and "正开着" in out.text, out.text)
+finally:
+    crcore.VIA.update(via="", by="")
+    crcore.pane_rows, crcore.send_text = saved[:2]
+    del rq.resolve, rq.codex_pick, rq.live_card, rq.ask_card
+
+
 # ---------------------------------------------------------------- 启动参数
 check("认出非交互的子命令", crcodex._first_arg(["app-server", "--listen", "unix://"]) == "app-server"
       and crcodex._first_arg(["-s", "read-only", "-a", "on-request"]) is None)
