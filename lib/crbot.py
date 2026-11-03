@@ -35,6 +35,7 @@ STALE_DAYS = 3                   # 最多往回翻这么多天
 TICK_SECS = 3                    # 多久检查一次有没有会话停下
 LIVE_SECS = 3                    # “思考中”卡片多久刷新一次（久了放慢，见 live_interval）
 MSG_LIMIT = 3800
+DM, GROUP = "dm", "group"         # 消息在哪边：你和机器人的单聊（助手自己的对话框）/ 员工群
 
 lock = threading.Lock()          # 命令和监控共用一个 Remote，串行执行
 remote = crcore.Remote()
@@ -74,6 +75,17 @@ def remember(message_id, name):
     crcore.save_json(MSGMAP, mp)
 
 
+def owner(reply):
+    """这条消息是哪个员工的：实时卡片、回复、汇报记着名字，别的看标题里第一个「【名字】」。"""
+    for name in (getattr(reply, "pending_for", None), getattr(reply, "reply_for", None),
+                 (getattr(reply, "merge", None) or {}).get("name")):
+        if name:
+            return name
+    head = (reply.text if isinstance(reply, crcore.Card) else str(reply)).split("\n", 1)[0]
+    m = re.search(r"【([^】]+)】", head)
+    return m.group(1) if m else None
+
+
 class Feishu:
     def __init__(self, app_id, app_secret, allow, group_name=GROUP_NAME):
         import lark_oapi as lark
@@ -96,16 +108,20 @@ class Feishu:
         self.jobs = queue.Queue()
         self.slot_lock = threading.Lock()
         self.after = {}                              # “思考中”卡片 id -> 它下面又来了几条消息（被刷上去多少）
-        self.merges = {}                             # 员工 -> 它这 10 分钟的汇报卡片 {"mid", "t0", "after", "entries"}
+        self.merges = {}                             # 员工 -> 它这 10 分钟的汇报卡片 {"mid", "t0", "after", "entries", "where"}
+        self.chat_of = {}                            # 发出去的消息 id -> 在单聊还是群里：被刷上去只数同一边的新消息
+        self.catchup_errs = {}
 
-    def bump(self):
-        """又多了一条消息：固定卡片又往上被刷了一格。"""
+    def bump(self, where=GROUP):
+        """那边（单聊 / 群）又多了一条消息：那边的固定卡片又往上被刷了一格。"""
         with self.slot_lock:
             for k in self.after:
-                self.after[k] += 1
+                if self.chat_of.get(k, GROUP) == where:
+                    self.after[k] += 1
             for v in list(self.merges.values()):   # 监控线程同时在改：先拷一份再数
-                v["after"] += 1
-            slots = crcore.load_json(SLOTS, {})
+                if v.get("where", GROUP) == where:
+                    v["after"] += 1
+            slots = crcore.load_json(SLOTS, {}) if where == self.where_for(None) else {}   # 看板在群里
             if slots:
                 for v in slots.values():
                     v["after"] = v.get("after", 0) + 1
@@ -117,7 +133,7 @@ class Feishu:
         cur = crcore.load_json(SLOTS, {}).get(slot)
         if not move and cur and (cur.get("pinned") or minor or cur.get("after", 0) < BURY) and self.patch(cur["mid"], card):
             return
-        mid = self.send(card)
+        mid = self.send(card, self.where_for(None))
         if not mid:
             return
         pinned = bool(self.group) and self.pin(mid)
@@ -136,9 +152,10 @@ class Feishu:
                 and not card.more and self.patch(cur["mid"], crcore.merged_card(cur["entries"], card))):
             cur["entries"].append(info)
             return
-        mid = self.send(card)
+        where = self.route(card)
+        mid = self.send(card, where)
         if mid:
-            self.merges[info["name"]] = {"mid": mid, "t0": time.time(), "after": 0, "entries": [info]}
+            self.merges[info["name"]] = {"mid": mid, "t0": time.time(), "after": 0, "entries": [info], "where": where}
 
     def recall(self, mid):
         from lark_oapi.api.im.v1 import DeleteMessageRequest
@@ -173,6 +190,29 @@ class Feishu:
             self.chat_id = chat_id
             crcore.save_json(CHAT, dict(crcore.load_json(CHAT, {}), chat_id=chat_id))
 
+    def where_for(self, name):
+        """员工 name 的消息发到哪：助手的发到你和机器人的单聊（它自己的对话框，不会被员工们的消息冲掉），别人的发到员工群。"""
+        return DM if not self.group or (name and crcore.is_assistant(name)) else GROUP
+
+    def route(self, reply, origin=None):
+        """这条消息发到哪：属于哪个员工的按 where_for；不属于谁的（帮助、出错、看板）回到你发命令的那边，监控自己发的去群里。"""
+        name = owner(reply)
+        return self.where_for(name) if name or not self.group else origin or GROUP
+
+    def chats(self):
+        """补收要翻的聊天：员工群、你和机器人的单聊。"""
+        return [(w, c) for w, c in ((GROUP, self.group), (DM, self.chat_id)) if c]
+
+    def dm_intro(self):
+        """助手搬进单聊后，在单聊里说一次：以后助手在这儿（也让这个对话框出现在你的消息列表上面）。"""
+        chat = crcore.load_json(CHAT, {})
+        if not self.group or chat.get("dm_intro"):
+            return
+        body = (f"以后助手的进度、回复和提问都发在这个单聊里，不会被员工们的消息冲掉。\n"
+                f"在这里直接打字就是跟助手说；「看看」「@3 内容」这些照样能用。员工们的卡片和看板还在「{self.group_name}」群里。")
+        if self.send(crcore.alert("👋 助手搬到这里了", body, "turquoise"), DM):
+            crcore.save_json(CHAT, dict(crcore.load_json(CHAT, {}), dm_intro=time.time()))
+
     # ---------------- 员工群
     def make_group(self):
         """建员工群：你是群主，机器人是管理员（能把看板置顶）。建好后所有消息都发到群里，单聊不再用。"""
@@ -192,7 +232,9 @@ class Feishu:
         crcore.save_json(CHAT, dict(crcore.load_json(CHAT, {}), group=self.group))
         crcore.save_json(SLOTS, {})                  # 看板重新发到群里（并置顶）
         log.info("建好了员工群「%s」", self.group_name)
-        self.create("text", json.dumps({"text": f"以后都在「{self.group_name}」群里聊了，这个单聊不再用。"}, ensure_ascii=False), p2p=True)
+        self.create("text", json.dumps({"text": f"员工们以后在「{self.group_name}」群里；这个单聊留给助手，在这里直接打字就是跟助手说。"},
+                                       ensure_ascii=False), p2p=True)
+        crcore.save_json(CHAT, dict(crcore.load_json(CHAT, {}), dm_intro=time.time()))
         self.jobs.put(crcore.welcome_card(self.group_name))
         with lock:
             remote.state = crcore.load_json(crcore.STATE, remote.state)
@@ -227,9 +269,11 @@ class Feishu:
         return resp.success()
 
     # ---------------- 发消息
-    def send(self, reply):
+    def send(self, reply, where=None):
+        """发一条消息；where 不写就按 route 定（助手的去单聊，别的员工的去群里）。"""
         if not self.allow:
             return False
+        where = where or self.route(reply)
         if isinstance(reply, crcore.Card):
             items = [("interactive", json.dumps(reply.card, ensure_ascii=False))]
         else:
@@ -239,15 +283,19 @@ class Feishu:
         first_id = None
         m = re.search(r"【([^】]+)】", str(reply)[:60])
         for msg_type, content in items:
-            mid = self.create(msg_type, content)
+            mid = self.create(msg_type, content, p2p=where == DM)
             first_id = first_id or mid
             if mid:
-                self.bump()
+                self.chat_of[mid] = where
+                self.bump(where)
             if m and mid:
                 remember(mid, m.group(1))
                 self.merges.pop(m.group(1), None)    # 它有别的卡片发在后面了：下一条汇报另起一张，不往上面的旧卡片里塞
         for extra in getattr(reply, "more", []):      # 太长的回复：接着发「续」卡片
-            self.send(extra)
+            self.send(extra, where)
+        if len(self.chat_of) > 500:                  # 只留最近的，和还在数「被刷上去几格」的
+            keep = set(self.after) | {v["mid"] for v in list(self.merges.values())}
+            self.chat_of = {k: v for i, (k, v) in enumerate(list(self.chat_of.items())) if k in keep or i >= 200}
         return first_id
 
     def call(self, fn, req):
@@ -277,8 +325,8 @@ class Feishu:
             self.set_chat(getattr(resp.data, "chat_id", None))
         return resp.data.message_id if resp.data else None
 
-    def send_file(self, path):
-        """把回复里提到的图 / PDF 发到你手机上：图片直接显示，其他是文件。"""
+    def send_file(self, path, where=None):
+        """把回复里提到的图 / PDF 发到你手机上：图片直接显示，其他是文件。where：你在哪边点的。"""
         from lark_oapi.api.im.v1 import (CreateFileRequest, CreateFileRequestBody,
                                          CreateImageRequest, CreateImageRequestBody)
         ext = os.path.splitext(path)[1].lower()
@@ -295,8 +343,8 @@ class Feishu:
         if not key:
             log.error("上传文件失败 code=%s msg=%s", resp.code, resp.msg)
             return self.send(f"📎 {os.path.basename(path)} 没发出去（飞书返回 {resp.code}：{resp.msg}）。"
-                             "如果是没有权限，要在飞书开放平台给应用开「获取与上传图片或文件资源」(im:resource)。")
-        return self.create(msg_type, json.dumps(key, ensure_ascii=False))
+                             "如果是没有权限，要在飞书开放平台给应用开「获取与上传图片或文件资源」(im:resource)。", where)
+        return self.create(msg_type, json.dumps(key, ensure_ascii=False), p2p=where == DM)
 
     def download(self, message_id, kind, key, name):
         """你发来的图片 / 文件：下载到 data/uploads/ 下，返回 (路径, 出错原因)。"""
@@ -319,7 +367,7 @@ class Feishu:
             log.error("更新卡片失败 code=%s msg=%s", resp.code, resp.msg)
             return False
         for extra in getattr(reply, "more", []):
-            self.send(extra)
+            self.send(extra, self.chat_of.get(message_id))
         return True
 
     # ---------------- 收消息 / 按钮
@@ -348,13 +396,9 @@ class Feishu:
             self.set_chat(m.chat_id)
 
     def receive(self, mid, chat_type, chat_id, open_id, mtype, raw, quoted):
-        """处理你发来的一条消息（飞书推送来的，或补收的）。建了员工群以后只认群里的。"""
-        if self.group and chat_type == "p2p":
-            if open_id == self.allow and self.claim(mid):
-                self.create("text", json.dumps({"text": f"我们现在都在「{self.group_name}」群里聊，请到群里发。这条没有处理。"},
-                                               ensure_ascii=False), p2p=True)
-            return
-        ok_chat = chat_id == self.group if self.group else chat_type == "p2p"
+        """处理你发来的一条消息（飞书推送来的，或补收的）。认员工群，和你跟机器人的单聊（助手的对话框：在这里说的都给助手）。"""
+        where = DM if chat_type == "p2p" else GROUP
+        ok_chat = where == DM or (self.group and chat_id == self.group)
         if not ok_chat or not self.authorized(open_id) or not self.claim(mid):
             return
         try:
@@ -362,8 +406,8 @@ class Feishu:
         except ValueError:
             content = {}
         files = []                                   # (image/file, key, 文件名)：像在电脑上贴截图
-        log.info("收到飞书消息：%s", mtype)              # 只记类型，不记内容
-        self.bump()
+        log.info("收到飞书消息：%s%s", mtype, "（单聊）" if where == DM and self.group else "")   # 只记类型，不记内容
+        self.bump(where)
         if mtype == "text":
             text = content.get("text", "")
         elif mtype == "post":                        # 图文一起发
@@ -379,12 +423,12 @@ class Feishu:
         elif mtype == "file":
             text, files = "", [("file", content.get("file_key"), content.get("file_name", ""))]
         else:
-            self.jobs.put("（目前支持文字、图片和文件；语音请用输入法转成文字再发）")
+            self.jobs.put(("note", "（目前支持文字、图片和文件；语音请用输入法转成文字再发）", where))
             return
         text = re.sub(r"@_user_\d+\s*", "", text).strip()   # 群里 @机器人 的那一截去掉
         name = crcore.load_json(MSGMAP, {}).get(quoted) if quoted else None   # 引用了哪个员工的卡片：直接对它说
         text = text.replace("@_all", "@所有人")      # 从 @ 列表点的「所有人」
-        self.jobs.put(("files", mid, files, text, name) if files else ("typed", text, name))
+        self.jobs.put(("files", mid, files, text, name, where) if files else ("typed", text, name, where))
 
     def catch_up_loop(self):
         """补收：机器人重启或断线的那一会儿你发的消息，飞书不会再推过来。
@@ -392,7 +436,7 @@ class Feishu:
         from lark_oapi.api.im.v1 import ListMessageRequest
         while True:
             try:
-                if self.offline_since and (self.group or self.chat_id):
+                if self.offline_since and self.chats():
                     since, self.offline_since = self.offline_since, None
                     self.report_stale(since)
                 if not self.group and time.time() >= self.next_group_try:
@@ -400,23 +444,23 @@ class Feishu:
                 if self.group and time.time() >= self.next_member_check:
                     self.next_member_check = time.time() + MEMBER_CHECK_SECS
                     self.check_members()
-                where = self.group or self.chat_id
-                if where:
+                self.dm_intro()
+                for where, chat in self.chats():
                     start = max(time.time() - CATCHUP_WINDOW, self.seen_since)
                     resp = self.client.im.v1.message.list(
-                        ListMessageRequest.builder().container_id_type("chat").container_id(where)
+                        ListMessageRequest.builder().container_id_type("chat").container_id(chat)
                         .start_time(str(int(start))).sort_type("ByCreateTimeAsc").page_size(50).build())
-                    if not resp.success() and resp.code != getattr(self, "catchup_err", None):
+                    if not resp.success() and resp.code != self.catchup_errs.get(where):
                         log.warning("补收消息：读聊天记录失败 code=%s msg=%s", resp.code, resp.msg)   # 同一个原因只记一次
-                    self.catchup_err = None if resp.success() else resp.code
+                    self.catchup_errs[where] = None if resp.success() else resp.code
                     for it in (resp.data.items or []) if resp.success() else []:
                         t = int(it.create_time) / 1000
                         if (it.sender and it.sender.sender_type == "user" and it.sender.id == self.allow
                                 and it.message_id not in self.seen and start <= t < time.time() - 20):       # 刚发的还在路上，留给推送
                             log.info("补收一条消息（%s 发的）", time.strftime("%H:%M", time.localtime(t)))
-                            self.jobs.put(f"📥 补收到你 {time.strftime('%H:%M', time.localtime(t))} 发的一条消息"
-                                          "（当时机器人在重启或断线），现在处理。")
-                            self.receive(it.message_id, "group" if self.group else "p2p", where, it.sender.id, it.msg_type,
+                            self.jobs.put(("note", f"📥 补收到你 {time.strftime('%H:%M', time.localtime(t))} 发的一条消息"
+                                                   "（当时机器人在重启或断线），现在处理。", where))
+                            self.receive(it.message_id, "p2p" if where == DM else "group", chat, it.sender.id, it.msg_type,
                                          it.body.content if it.body else "", it.parent_id or it.root_id)
             except Exception:  # noqa: BLE001
                 log.exception("补收消息出错")
@@ -424,16 +468,19 @@ class Feishu:
 
     def report_stale(self, since):
         """电脑关机 / 机器人停了很久：那段时间你发的、已经超过半小时的消息不自动执行（免得旧指令突然跑起来），
-        列成一张卡片，每条一个〔重发〕按钮。"""
+        列成一张卡片，每条一个〔重发〕按钮。群里和单聊各翻各的，卡片发在那一边。"""
+        for where, chat in self.chats():
+            self._report_stale(since, where, chat)
+
+    def _report_stale(self, since, side, chat):
         from lark_oapi.api.im.v1 import ListMessageRequest
-        where = self.group or self.chat_id
         start = max(since, time.time() - STALE_DAYS * 86400, self.seen_since)
         end = time.time() - CATCHUP_WINDOW
         if end <= start:
             return
         found, token = [], None
         for _ in range(5):                               # 最多翻 5 页（250 条）
-            req = (ListMessageRequest.builder().container_id_type("chat").container_id(where)
+            req = (ListMessageRequest.builder().container_id_type("chat").container_id(chat)
                    .start_time(str(int(start))).end_time(str(int(end))).sort_type("ByCreateTimeAsc").page_size(50))
             resp = self.client.im.v1.message.list((req.page_token(token) if token else req).build())
             if not resp.success():
@@ -451,7 +498,7 @@ class Feishu:
         lines, buttons = [], []
         for it in found:
             raw = it.body.content if it.body else ""
-            store[it.message_id] = {"chat_type": "group" if self.group else "p2p", "chat_id": where, "open_id": it.sender.id,
+            store[it.message_id] = {"chat_type": "p2p" if side == DM else "group", "chat_id": chat, "open_id": it.sender.id,
                                     "mtype": it.msg_type, "raw": raw, "quoted": it.parent_id or it.root_id}
             when = time.strftime("%m-%d %H:%M", time.localtime(int(it.create_time) / 1000))
             lines.append(f"· {when}　{crcore.one_line(preview(it.msg_type, raw), 60)}")
@@ -461,7 +508,7 @@ class Feishu:
         crcore.save_json(STALE, store)
         body = ("这段时间机器人没在运行（电脑关机、休眠或断网）。下面这些超过半小时了，**没有自动执行**，"
                 "免得旧指令突然跑起来。还要做的点〔重发〕：\n\n" + "\n".join(lines[-30:]))
-        self.send(crcore.alert(f"📭 关机期间你发的 {len(found)} 条消息没执行", body, "orange", buttons))
+        self.send(crcore.alert(f"📭 关机期间你发的 {len(found)} 条消息没执行", body, "orange", buttons), side)
 
     def resend(self, mid):
         """〔重发〕：把关机期间那条消息当成刚发的处理。"""
@@ -479,29 +526,34 @@ class Feishu:
         if self.authorized(ev.operator.open_id):
             cmd = (ev.action.value or {}).get("cmd", "") or ev.action.option or ""   # 按钮带 value；「···」菜单里点的是 option
             if cmd:
-                self.jobs.put(("cmd", cmd, ev.context.open_message_id if ev.context else None))
+                chat = getattr(ev.context, "open_chat_id", None) if ev.context else None
+                where = DM if not self.group or (chat and chat != self.group) else GROUP   # 点的是单聊里的卡片还是群里的
+                self.jobs.put(("cmd", cmd, ev.context.open_message_id if ev.context else None, where))
         return P2CardActionTriggerResponse({"toast": {"type": "info", "content": "收到"}})
 
     def worker(self):
         while True:
             job = self.jobs.get()
+            where = job[-1] if isinstance(job, tuple) else None   # 你在哪边发的 / 点的：不属于哪个员工的回复回到那边
             try:
                 if isinstance(job, tuple):            # 你发了消息 / 点了按钮：你醒着，夜里也照常推
                     with lock:
                         remote.saw_you()
                 if isinstance(job, tuple) and job[0] == "files":
-                    _, mid, files, text, name = job
+                    _, mid, files, text, name, _ = job
                     got = [self.download(mid, kind, key, fname) for kind, key, fname in files]
                     bad = [err for path, err in got if not path]
                     if bad:
                         self.send(f"📎 图片 / 文件没收下来（飞书返回 {bad[0]}）。如果是没有权限，要在飞书开放平台给应用开"
-                                  "「获取与上传图片或文件资源」(im:resource)，发布新版本后再试。")
+                                  "「获取与上传图片或文件资源」(im:resource)，发布新版本后再试。", where)
                         continue
                     with lock:
-                        reply = remote.handle_files([path for path, _ in got], text, name)
+                        reply = remote.handle_files([path for path, _ in got], text, name, dm=where == DM)
                 elif isinstance(job, tuple) and job[0] == "typed":   # 你手打的：机器人不猜，交给助手 / 引用的那个员工
                     with lock:
-                        reply = remote.handle(job[1], typed=True, to=job[2])
+                        reply = remote.handle(job[1], typed=True, to=job[2], dm=where == DM)
+                elif isinstance(job, tuple) and job[0] == "note":
+                    reply = job[1]
                 elif isinstance(job, tuple) and job[1].startswith("#resend "):
                     reply = self.resend(job[1].split()[1])
                 elif isinstance(job, tuple):
@@ -511,18 +563,18 @@ class Feishu:
                     reply = job
                 if reply is None:                     # 比如〔⏹ 停止〕：卡片自己会变，不用再发消息
                     continue
-                if getattr(reply, "summon", False):  # 你发「看看」：看板挪到最下面，旧的撤回、置顶跟着换
+                if getattr(reply, "summon", False) and where != DM:   # 你在群里发「看看」：看板挪到最下面，旧的撤回、置顶跟着换
                     self.put_slot(reply.slot, reply, move=True)
                     continue
                 if isinstance(reply, crcore.Files):  # 〔📎 文件名〕：把图 / PDF 发到手机上
                     for path in reply.paths:
-                        self.send_file(path)
+                        self.send_file(path, where)
                     continue
-                clicked = job[2] if isinstance(job, tuple) and job[0] == "cmd" and len(job) > 2 else None
+                clicked = job[2] if isinstance(job, tuple) and job[0] == "cmd" else None
                 if clicked and getattr(reply, "in_place", False) and self.patch(clicked, reply):
                     mid = clicked                     # 比如点了问题的选项：这张卡片原地变成实时进度
                 else:
-                    mid = self.send(reply)
+                    mid = self.send(reply, self.route(reply, where))   # 在单聊里发「看看」：看板就发在单聊里
                 if mid and getattr(reply, "pending_for", None):
                     with lock:
                         pend = crcore.load_json(PENDING, {})
@@ -535,7 +587,7 @@ class Feishu:
             except Exception as e:  # noqa: BLE001 —— 单条命令出错不影响守护进程
                 log.exception("处理命令出错")
                 try:
-                    self.send(f"出错了：{e}")
+                    self.send(f"出错了：{e}", where)
                 except Exception:  # noqa: BLE001 —— 连「出错了」都发不出去（比如断网）：也不能让这个线程死掉
                     log.exception("发送出错提示也失败了")
 
@@ -560,12 +612,15 @@ def live_loop(feishu):
     started, moved = {}, {}                          # 消息 id -> 开始干活的时间；会话名 -> 上次挪到最底下的时间
     while True:
         time.sleep(LIVE_SECS)
+        t0 = time.time()
         try:
             pend = crcore.load_json(PENDING, {})
             if not pend:
                 continue
             with lock:
+                t1 = time.time()
                 updates = remote.live_updates(list(pend))
+            t2 = time.time()
             for name, card, final in updates:
                 mid = pend.get(name)
                 started.setdefault(mid, remote.state["remote_pending"].get(name, time.time()))
@@ -573,7 +628,7 @@ def live_loop(feishu):
                     last_t, last_body = shown.get(mid, (0, None))
                     since = remote.state["remote_pending"].get(name, time.time())
                     if feishu.after.get(mid, 0) >= BURY and time.time() - moved.get(name, 0) > 120:
-                        new = feishu.send(card)      # 进度卡片被别的消息刷上去了：挪到最底下，旧的撤回（最多 2 分钟挪一次）
+                        new = feishu.send(card, feishu.where_for(name))     # 进度卡片被别的消息刷上去了：挪到最底下，旧的撤回（最多 2 分钟挪一次）
                         if new:
                             with lock:
                                 p = crcore.load_json(PENDING, {})
@@ -603,13 +658,31 @@ def live_loop(feishu):
                 if card is None:
                     continue
                 if took > 60 or below >= 1:          # 干了一阵子，或者下面已经有别的消息：回复发在最底下（会提醒你），旧进度卡片撤回
-                    if feishu.send(card):
+                    if feishu.send(card, feishu.where_for(name)):
                         feishu.recall(mid)
                         continue
                 if not feishu.patch(mid, card):       # 很快就答完、下面也没别的消息：原地换成回复
-                    feishu.send(card)
+                    feishu.send(card, feishu.where_for(name))
         except Exception:  # noqa: BLE001
             log.exception("刷新思考中卡片出错")
+        else:
+            if time.time() - t0 > 10:                 # 卡片该几秒刷一次：慢了记下来是卡在哪（等锁 / 读状态 / 调飞书）
+                log.warning("刷新思考中卡片慢了：等锁 %.1f 秒，读状态 %.1f 秒，调飞书 %.1f 秒",
+                            t1 - t0, t2 - t1, time.time() - t2)
+
+
+UPGRADE_SECS = 300   # 多久看一次有没有员工该换新版本
+
+
+def upgrade_loop():
+    """客户端自己更新过：闲着的员工换上新版本（见 crcore.Remote.upgrade_tick）。重开一个要半分钟，不占着锁，
+    跟命令行「cr 下班 / 上班」一样用自己的 Remote，不耽误飞书消息和别的通知。"""
+    while True:
+        time.sleep(UPGRADE_SECS)
+        try:
+            crcore.Remote().upgrade_tick()
+        except Exception:
+            log.exception("换新版本出错")
 
 
 def monitor_loop(feishu):
@@ -630,7 +703,7 @@ def monitor_loop(feishu):
                         continue
                     msg = crcore.as_card(item) if item.get("card") else item["text"]
                     if item.get("pending_for"):          # 你在电脑上叫员工干活：这张实时卡片跟飞书发起的一样登记、刷新
-                        mid = feishu.send(msg)
+                        mid = feishu.send(msg, feishu.where_for(item["pending_for"]))
                         if mid:
                             with lock:
                                 pend = crcore.load_json(PENDING, {})
@@ -652,7 +725,7 @@ def monitor_loop(feishu):
                     if mid:
                         crcore.save_json(PENDING, pend)
                     if not (mid and feishu.patch(mid, msg)):
-                        feishu.send(msg)
+                        feishu.send(msg, feishu.where_for(item["for"]) if item.get("for") else None)
         except Exception:  # noqa: BLE001
             log.exception("监控出错")
         names = {t.name for t in threading.enumerate() if t.is_alive()}
@@ -682,6 +755,7 @@ def main():
     were_on = [n for n, e in crcore.load_json(crcore.REGISTRY, {}).items() if e.get("alive")]   # 上次还在上班的
     lost = remote.lost_card(were_on)                     # 开机后它们的进程没了：电脑关机 / 重启过
     threading.Thread(target=monitor_loop, args=(feishu,), daemon=True).start()
+    threading.Thread(target=upgrade_loop, name="upgrade", daemon=True).start()
     note = crcore.load_json(WATCHDOG_NOTE, None)
     if note:
         os.remove(WATCHDOG_NOTE)

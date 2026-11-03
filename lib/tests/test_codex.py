@@ -400,13 +400,19 @@ check("这一轮你说的话：没经过机器人，算你在电脑上亲手打�
 check("结论", crcore.last_reply(SID, final_only=True) == "全部通过。要我顺手提交吗？")
 asked, steps, stopped = crcore.turn_steps(SID, T0)
 check("过程：你说的话、它说的、跑的命令", asked == "跑一下测试" and ("tool", ("⚙️ 运行命令", "pytest -q", None), True) in steps and not stopped, steps)
-check("拍板的判断跟 Claude 一样", crcore.is_decision(crcore.last_turn(SID)["texts"][-1]))
+card = crcore.Remote().stop_card("cx-a", {"sessionId": SID, "statusAt": T0 + 9, "cwd": "/tmp"}, crcore.last_turn(SID))
+check("回复里问「要我顺手提交吗？」也只是汇报：不叫你拍板、没有快捷按钮",
+      "拍板" not in card.text and "好，做吧" not in json.dumps(card.card, ensure_ascii=False), card.text)
+card = crcore.Remote().reply_card("cx-a", {"sessionId": SID, "statusAt": T0 + 9, "status": "idle", "cwd": "/tmp",
+                                           "agent": "codex", "transcript": path, "home": HOME_B}, T0)
+raw = json.dumps(card.card, ensure_ascii=False)
+check("回复卡片也一样：标题是回复本身，没有〔好，做吧〕〔先别〕", "要我顺手提交吗" in raw and "拍板" not in card.text
+      and not any(w in raw for w in ("好，做吧", "先别", "我选")), card.text)
 st = crcodex.session_status({"transcript": path, "home": HOME_B})
 check("模型、思考程度、上下文、额度", st["model"] == "gpt-6.1-sol" and st["effort"] == "high" and st["ctx"] == 10
       and st["5h"] == 12 and st["7d"] == 51, st)
 check("卡片上的用量是它自己账号的", crcore.usage_text(st) == "上下文 10% · 5 小时额度 12% · 周额度 51%", crcore.usage_text(st))
-check("你最后说的话 / 之后说过没有", crcore.last_human_text(SID) == "跑一下测试" and crcore.user_spoke_since(SID, T0)
-      and not crcore.user_spoke_since(SID, T0 + 5))
+check("你最后说的话", crcore.last_human_text(SID) == "跑一下测试")
 
 with open(path, "a", encoding="utf-8") as f:   # 第二轮：还在跑一条命令
     f.write("\n".join([rec(T0 + 20, "event_msg", {"type": "task_started", "turn_id": "t2", "turn_attribution": {"turn_trigger": "goal"}}),

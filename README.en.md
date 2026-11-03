@@ -49,32 +49,32 @@ python install.py          # Windows: py -3 install.py
 **Morning commute.** Open Feishu and look at the pinned 📋 employee board:
 - #1 finished the baseline;
 - #2 is editing the paper;
-- #3 🙋 needs a decision from you.
+- #3 popped a multiple-choice question for you.
 
 Tap 〔B〕 on #3's card, and the Claude Code session on the server carries on.
 
 **Between meetings.** #1 wants to install a package and an approval card arrives; tap 〔允许〕 (Allow). Tell the secretary "hire someone to get repo-x's tests passing". It opens #5 in tmux and assigns the work. #5's card shows, live, what its last few steps were and how long each took. To cut in while it's busy, send `@5! don't touch the CI config` instead of waiting for it to finish the current step.
 
-**Evening.** `@1 下班` (clock out): #1 exits cleanly, gives its number back and keeps its conversation. Tomorrow, `上班 <name>` (clock in) resumes it in the same directory with the lowest free number. At night only decisions reach you; everything else waits for you on the board.
+**Evening.** `@1 下班` (clock out): #1 exits cleanly, gives its number back and keeps its conversation. Tomorrow, `上班 <name>` (clock in) resumes it in the same directory with the lowest free number. At night only pop-ups that ask you something or need your approval reach you; everything else waits for you on the board.
 
 ## Features
 
 - 🧑‍💼 **Secretary.** Plain messages go to the secretary: "clock out #3", "ask #5 how it's going", "hire someone to do X".
 - 📣 **Direct orders.** `@3 …` goes to #3. Quote-reply a card to talk to that employee. `@所有人 …` (@everyone) holds a meeting.
-- 🙋 **Decisions become buttons.** These include:
+- 🙋 **Decisions become buttons.** When a worker pops a question, you get:
   - A/B/C options;
-  - yes/no;
   - multi-select (tick, then submit);
   - Allow / Always allow / Deny.
 
-  One tap answers for you. Options that come with previews (sketches, code snippets) show them, taken from the session log, so you can compare on the phone.
+  One tap answers for you. A reply that merely ends with a question stays a normal message: no guessed buttons. Options that come with previews (sketches, code snippets) show them, taken from the session log, so you can compare on the phone.
 - ⏳ **Live progress.** The last few steps (thinking, commands, each with its duration) and the elapsed time are on the card. When the work is done, the card becomes the reply in place.
 - 📋 **Employee board.** One pinned card shows who's working, idle or waiting for you. "Still waiting" updates only touch the board.
 - 🔁 **Terminal and Feishu stay in sync.** Type straight into a worker's session (at the desk, over ssh or remote desktop) and Feishu still gets a live progress card that turns into the conclusion. Every message to a worker carries a source tag: 你 · 飞书 (you, Feishu), 你 · 终端 (you, terminal), `#3 name` (another worker), 助手 (relayed by the secretary) or 系统 (scheduled jobs, goal continuations); lines typed while it works are marked 插话 (cut-in). When a goal pauses on its own (check timed out, usage limit) you get a note. Claude Code sessions parked as background jobs are tracked too.
 - ⏩ **Queue and send now.** Claude Code queues a message sent while it's busy until the current step is done. The card marks it 排队中 (queued); tap 〔立即发送〕 (send now) to deliver it immediately, or send `@3! …` in the first place.
 - 🏷 **Tell them apart.** Each card's title carries the worker type, `CC` (Claude Code) or `Codex`, plus an install label when you have several (e.g. `Codex·官方`). The mark comes from the program actually running, never from the name.
 - ✨ **Clean cards.** Title: badge, name and status. Subtitle: task and directory. What was said to the worker sits in a tinted block; the answer is the body. One row of small buttons, the rest in "···". A row of small footer tags (duration, model, context, quota) that turn orange or red when running low.
-- 🌙 **Quiet.** One employee's reports within 10 minutes merge into one card, so your phone buzzes once. At night only decisions are pushed. Night hours are learned from when you usually use Claude.
+- 🌙 **Quiet.** One employee's reports within 10 minutes merge into one card, so your phone buzzes once. At night only pop-ups waiting for your tap are pushed. Night hours are learned from when you usually use Claude.
+- ⬆️ **Auto-upgrade.** After Claude Code updates itself, idle workers (stopped for 10+ minutes, no pop-up, no command still running under them) clock out and back in on the new version: same conversation, same tmux window, same badge. Busy ones wait until they're idle. One summary card per round.
 - 🗂 **HR.** Clock out (conversation kept), clock in (resume in place), fire, and let employees message each other.
 - 🖥 **Remote terminal.** View the screen (terminal chrome stripped; menus shown as options with buttons), press keys, stop, change effort, and run `/compact` with a progress card.
 - 🔌 **Survives reboots.** After a restart you're told how long it was down. Messages you sent meanwhile are listed for you to resend or skip. One tap brings every employee back.
@@ -107,7 +107,8 @@ They work together, for example claude-squad at the desk and cc-crew on the go.
 - Every worker shows a type mark: `CC`, `CC·<label>` (another Claude config dir), `Codex·<label>`. The mark comes from the program actually running and its config dir, never from the name.
 - Several Codex installs: `CLAUDE_MONITOR_CODEX_HOMES=label|CODEX_HOME|env-script;…` in `config.env`. Clocking in (`codex resume`) uses the worker's original install.
 - Pop-ups are never answered for you: resuming a thread with a paused `/goal` shows "Resume paused goal?" (Enter would resume it). The bot does not type or press Enter while a pop-up is open: clocking in sends you the screen card with the choices, clocking out presses Esc (no choice) before `/quit`. The startup update prompt is turned off for bot-launched codex.
-- Where they run: workers the bot starts or clocks back in run in its private tmux (`rtmux ls`) with `--no-daemon`, so the work itself runs in that pane's process instead of the shared per-CODEX_HOME background server, which keeps the environment of whichever terminal opened codex first (e.g. your SSH tmux).
+- Where they run: workers the bot starts or clocks back in (Claude and codex alike) run in your normal tmux, so a plain `tmux ls` shows them; one that used to be a window of your own session (e.g. `exp-a:4`) goes back to that window. Codex runs with `--no-daemon`, so the work itself runs in that pane's process instead of the shared per-CODEX_HOME background server, which keeps the environment of whichever terminal opened codex first (e.g. your SSH tmux).
+- Shared machine: set `CLAUDE_MONITOR_TMUX_PREFIX=me-` in `config.env` and the bot's tmux sessions are named `me-…`, so others can tell at a glance they're yours. Worker names don't change.
 - Hire: `cr 新建 name dir codex [codex args…]` (first install) or `codex-<label>`; the name gets a `cx-` prefix.
 - Set `[tui] terminal_title = ["thread-id", "spinner", "thread-name", "project"]` in each `config.toml` so the bot can map tmux panes to sessions and see `Action Required`.
 - Optional: `cr codex-hooks` installs a record-only PermissionRequest hook; trust it once with `/hooks` in Codex.

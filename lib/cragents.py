@@ -3,7 +3,7 @@
 思路参考 t3code 的多 agent 支持：每种 agent 一个适配器（Claude 的在 crcore 里，Codex 的在 crcodex.py），
 对外只有统一的状态、待处理请求和能力（caps），用的人不用知道是哪种 agent：
 - 状态 state：working 在干活 / waiting_approval 等你批准 / waiting_answer 等你回答选择题 /
-  waiting_decision 停下来问你拿主意（它写在回复里的问题）/ background 等后台任务 / idle 停下 / offline 下班了；
+  background 等后台任务 / idle 停下 / offline 下班了（回复里写的问句不算等你：只有弹出来的框才算）；
 - 待处理请求 pending：{"kind": approval / question / screen, "title", "detail", "options": [{"label", "cmd"}]}；
 - 操作：每个员工的 cmds、每个选项的 cmd 都是一条普通命令，交给 `cr`（或 crcore.Remote().handle）执行，
   跟飞书卡片上的按钮走同一条路；App 发话时设环境变量 CR_VIA=app，员工那边就记成「📱 你在 App 上说」；
@@ -42,15 +42,13 @@ def label(e):
     return crcore.mark(e)
 
 
-def state_of(name, e, asking):
+def state_of(e):
     if not e.get("alive"):
         return "offline"
     if e.get("status") == "busy":
         return "working"
     if e.get("waiting"):
         return "waiting_approval" if "permission" in e["waiting"] else "waiting_answer"
-    if name in asking:
-        return "waiting_decision"
     if e.get("status") == "shell":
         return "background"
     return "idle"
@@ -64,18 +62,16 @@ def employee(remote, name, e, badges, with_pending=True, heard=()):
     alive = bool(e.get("alive"))
     bar = crcore.session_status(e) if alive else {}
     latest = (st.get("bg") or {}).get(name)
-    asking = (st.get("asking") or {}).get(name)
     out = {
         "name": name, "badge": badges.get(name), "role": "secretary" if crcore.is_assistant(name) else "staff",
         "agent": agent_of(e), "flavor": e.get("flavor") or "", "label": label(e),
         "home": e.get("home") or e.get("cfg") or "",
-        "state": state_of(name, e, st.get("asking") or {}), "alive": alive,
+        "state": state_of(e), "alive": alive,
         "since": e.get("statusAt"), "started": e.get("startedAt"), "offline_since": None if alive else e.get("died"),
         "cwd": e.get("cwd"), "topic": remote.topic(name, e), "session_id": e.get("sessionId"),
         "model": bar.get("model") or "", "effort": bar.get("effort") or "", "ctx": bar.get("ctx"),
         "quota": {k: bar.get(k) for k in ("5h", "7d", "30d") if bar.get(k) is not None},
         "latest": {"t": latest["t"], "text": latest["text"]} if latest else None,
-        "decision": {"t": asking["t"], "q": asking["q"]} if asking else None,
         "pending": None,
         "heard": [{k: x.get(k) for k in crcore.SAID_KEYS} for x in heard][-HEARD_SHOW:],
         "caps": CAPS[agent_of(e)],

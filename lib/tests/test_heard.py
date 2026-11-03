@@ -7,6 +7,7 @@ import os
 import queue
 import sys
 import tempfile
+import threading
 import time
 
 for stream in (sys.stdout, sys.stderr):
@@ -237,7 +238,7 @@ for label, rows, want in [("@2 + 图", [[{"tag": "text", "text": "@2 "}, img]], 
                           ("@所有人 + 图：交给秘书", [[{"tag": "text", "text": "@所有人"}], [img]], ("秘书", "@所有人"))]:
     b = Bot()
     crbot.Feishu.receive(b, "m1", "p2p", "c", "me", "post", json.dumps({"title": "", "content": rows}), None)
-    _, _, files, text, quoted = b.jobs.get_nowait()
+    _, _, files, text, quoted, _ = b.jobs.get_nowait()
     r.state.pop("attach", None)
     crcore.save_json(crcore.STATE, r.state)
     got.clear()
@@ -251,6 +252,99 @@ check("只打「@2」没带图：照旧交给秘书", got == [("秘书", "@2")],
 got.clear()
 r.handle("@2 看看", typed=True)
 check("「@2 看看」：照旧直接发", got == [(NAME, "看看", 0)], got)
+
+# 6b. 助手单独一个对话框（你和机器人的单聊）：在那儿说的都给助手；助手的消息发到单聊，别的员工的、看板发到群里
+b = Bot()
+b.group = "grp"
+for chat_type, chat_id, want in [("p2p", "dm-chat", "dm"), ("group", "grp", "group"), ("group", "别的群", None)]:
+    crbot.Feishu.receive(b, "m-" + chat_id, chat_type, chat_id, "me", "text", json.dumps({"text": "你好"}), None)
+    job = b.jobs.get_nowait() if not b.jobs.empty() else None
+    check(f"收消息：{chat_type} {chat_id} 记成 {want}", (job[-1] if job else None) == want, job)
+say0 = r.say
+r.say = lambda text, chat, reg: got.append(("say", chat)) or "SAY"
+r.state.update(current=NAME, current_at=time.time(), default="助手")
+crcore.save_json(crcore.STATE, r.state)
+got.clear()
+r.handle("帮我看下进度", typed=True)
+r.handle("帮我看下进度", typed=True, dm=True)
+check("群里正跟某个员工对话时：群里打的字给它，单聊里打的字给助手（不算在对话里）", got == [("say", NAME), ("say", None)], got)
+got.clear()
+r.handle_files([os.path.join(TMP, "a.png")], "看这张图", None, dm=True)
+check("单聊里发图加一句话：给助手", got == [("助手", "看这张图", 1)], got)
+# 「截图 + @6 文字」：文字开头 @了人就发给被 @ 的人，图跟着过去——单聊（默认给助手）、引用了别人的卡片都不例外
+r.say = lambda text, chat, reg: got.append(("say", chat, text)) or "SAY"
+for where in ("dm", "group"):
+    for order in ("图在前", "图在后", "图在中间"):
+        for at in ("@2", f"@{NAME}"):
+            words = [{"tag": "text", "text": f"{at} 这也不对呀"}]
+            rows = {"图在前": [[img], words], "图在后": [words, [img]],
+                    "图在中间": [[{"tag": "text", "text": f"{at} "}], [img], [{"tag": "text", "text": "这也不对呀"}]]}[order]
+            b = Bot()
+            b.group = "grp"
+            crbot.Feishu.receive(b, "m1", "p2p" if where == "dm" else "group", "dm-chat" if where == "dm" else "grp", "me", "post",
+                                 json.dumps({"title": "", "content": rows}), None)
+            _, _, files, text, quoted, side = b.jobs.get_nowait()
+            r.state.pop("attach", None)
+            crcore.save_json(crcore.STATE, r.state)
+            got.clear()
+            r.handle_files([os.path.join(TMP, "a.png")] * len(files), text, quoted, dm=side == "dm")
+            check(f"{'单聊' if where == 'dm' else '群里'}「{order} + {at} 文字」：发给被 @ 的人，图跟着过去，不记成给助手",
+                  got == [(NAME, "这也不对呀", 1)] and not (r.held_files() or {}).get("for"), (text, got, r.held_files()))
+for label, call, want in [
+        ("引用 5号的卡片发「截图 + @2 文字」：以 @2 为准", lambda: r.handle_files([os.path.join(TMP, "a.png")], "@2 这也不对呀", "eval-bot"),
+         [(NAME, "这也不对呀", 1)]),
+        ("引用 5号的卡片打「@2 文字」：以 @2 为准", lambda: r.handle("@2 这也不对呀", typed=True, to="eval-bot"), [(NAME, "这也不对呀", 0)]),
+        ("引用 5号的卡片打字没 @：照旧发给 5号", lambda: r.handle("这也不对呀", typed=True, to="eval-bot"), [("eval-bot", "这也不对呀", 0)]),
+        ("单聊「截图 + 文字」没 @：照旧给助手", lambda: r.handle_files([os.path.join(TMP, "a.png")], "这也不对呀", None, dm=True),
+         [("助手", "这也不对呀", 1)]),
+        ("单聊「截图 + 文字中间带 @」（讨论里提到 @2、邮箱）：不算点名，照旧给助手",
+         lambda: r.handle_files([os.path.join(TMP, "a.png")], "上次 @2 说的不对，发 a@b.com 问问", None, dm=True),
+         [("助手", "上次 @2 说的不对，发 a@b.com 问问", 1)]),
+        ("单聊打字中间带 @：不算点名，照旧给助手", lambda: r.handle("看下 x@y.com 和 @2 的代码", typed=True, dm=True),
+         [("say", None, "看下 x@y.com 和 @2 的代码")]),
+        ("引用 5号的卡片、文字中间带 @2：照旧发给 5号", lambda: r.handle("跟 @2 说的一样吗", typed=True, to="eval-bot"),
+         [("eval-bot", "跟 @2 说的一样吗", 0)]),
+        ("单聊「截图 + @助手 文字」：给助手（交给 say，不算群里正在对话的人）",
+         lambda: r.handle_files([os.path.join(TMP, "a.png")], "@助手 这也不对呀", None, dm=True), [("say", None, "这也不对呀")])]:
+    r.state.pop("attach", None)
+    crcore.save_json(crcore.STATE, r.state)
+    got.clear()
+    call()
+    check(label, got == want, got)
+r.state.pop("attach", None)
+r.state.update(current=None, default=None)
+crcore.save_json(crcore.STATE, r.state)
+r.say = say0
+
+
+class Sides(crbot.Feishu):
+    def __init__(self, group="grp"):
+        self.group, self.allow, self.sent = group, "me", []
+        self.after, self.merges, self.chat_of = {}, {}, {}
+        self.slot_lock = threading.Lock()
+
+    def create(self, msg_type, content, p2p=False):
+        self.sent.append("dm" if p2p else "group")
+        return f"m{len(self.sent)}"
+
+
+f = Sides()
+f.send(crcore.alert("💬【助手】回复", "好的", "green"))
+f.send(crcore.alert(f"💬【{NAME}】回复", "好的", "green"))
+live = crcore.alert("⏳【助手】正在思考", "", "blue")
+live.pending_for = "助手"
+f.send(live)
+f.send("出错了：x", "dm")
+f.send("出错了：x")
+f.send(crcore.alert("📋 员工看板", "", "blue"), f.route(crcore.alert("📋 员工看板", "", "blue"), "dm"))
+check("发到哪：助手的去单聊、别的员工的去群里；不属于谁的回到你发命令的那边（没说就去群里）",
+      f.sent == ["dm", "group", "dm", "dm", "group", "dm"], f.sent)
+f.after = {"m1": 0, "m2": 0}
+f.bump("group")
+check("群里来了新消息：只算群里的卡片被刷上去，单聊里的不动", f.after == {"m1": 0, "m2": 1}, f.after)
+f0 = Sides(group=None)
+f0.send(crcore.alert(f"💬【{NAME}】回复", "好的", "green"))
+check("还没建群：照旧都发单聊", f0.sent == ["dm"], f0.sent)
 
 # 7. Claude Code 把对话挪成后台任务（parked）：tmux 里那个只是前台，状态、对话记录、同事名都跟后台那个走
 crcore.crcodex.discover = lambda: []                       # 不认这台机器上真的 codex
@@ -359,6 +453,12 @@ crcore.pane_rows = lambda s: QUEUED
 live = json.dumps(crcore.Remote().live_card(NAME, dict(E, status="busy"), T0).card, ensure_ascii=False)
 crcore.pane_rows = real_pane
 check("实时卡片：排着队的话标「排队中」，给〔立即发送〕", "排队中" in live and f"#sendnow {NAME}" in live, live[-800:])
+crcore.pane_rows = lambda s: []
+quiet = json.dumps(crcore.Remote().live_card(NAME, dict(E, status="busy"), time.time() + 3600).card, ensure_ascii=False)
+going = json.dumps(crcore.Remote().live_card(NAME, dict(E, status="busy"), T0).card, ensure_ascii=False)
+crcore.pane_rows = real_pane
+check("实时卡片：还在想（想完才写进对话记录）：过程最后一行「思考中　N秒」跟着走；在跑命令时不显示", "思考中　" in quiet
+      and "思考中　" not in going, quiet[-600:])
 
 # 12. 上一句还没等到回复又发了一句：旧的实时卡片撤回，新卡片从第一句算起——连发的几句都列出来、进度接着显示，什么都不丢
 SID3, N3, T1 = "33333333-2222-3333-4444-555555555555", "demo-test", int(time.time()) - 300
@@ -429,9 +529,43 @@ check("旧卡片其实已经答完：原地换成回复，不撤回", fb.log == 
 fb = FakeFeishu(ok=False)
 crbot.Feishu.retire(fb, "old-card", live)
 check("换不了（太久了之类）：回复照发，再撤回", fb.log == [("patch", "old-card"), ("send",), ("recall", "old-card")], fb.log)
-check("「…第 2 次是问这次测试叫什么。」是陈述，不是要你拍板（「什么」「怎么」里的「么」不算问句）",
-      not crcore.is_decision("睡醒了。这次测试叫“连发测试”，第 1 次是你要我回「睡醒了」，第 2 次是问这次测试叫什么。")
-      and crcore.ask_kind("要我现在重启么")[0] == "yesno" and crcore.ask_kind("要我直接帮你改成上面的参数吗？")[0] == "yesno")
+
+# 12b. 助手（回复常常很长）：它还在干活你又发了一句——旧卡片原地定格成到这句为止的回复（整段都在，不撤回），这句另起一张；
+#      别的员工照旧并进新卡片、旧的撤回（上面 12）
+SID4, NA, T2 = "44444444-2222-3333-4444-555555555555", "助手", int(time.time()) - 600
+LONG = "是 cc-crew 的 bug，我已经交给 8 号去修了。" + "原因是单聊里图文消息开头的 @ 被忽略了。" * 12 + "修好后我告诉你。"
+with open(os.path.join(proj, f"{SID4}.jsonl"), "w", encoding="utf-8") as f:
+    f.write("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in [
+        user(T2 + 1, "我不是@6 了吗？怎么还是发给你了", **HUMAN),
+        assistant(T2 + 5, {"type": "tool_use", "id": "h1", "name": "Bash", "input": {"command": "grep heard", "description": "查一下记录"}}),
+        user(T2 + 8, [{"type": "tool_result", "tool_use_id": "h1", "content": "ok"}]),
+        assistant(T2 + 30, {"type": "text", "text": LONG}),
+        assistant(T2 + 32, {"type": "tool_use", "id": "h2", "name": "Bash", "input": {"command": "cr say", "description": "告诉8号"}}),
+        queued(T2 + 61, [{"type": "text", "text": "算了还是开头是@ 比较好"}], {"kind": "human"})]))
+crcore.note_heard(NA, SID4, [{"t": T2 + 60.0, "kind": "human", "src": "feishu", "by": "", "text": "算了还是开头是@ 比较好", "images": 0}])   # 新那句很快就听到了（heard 前后放宽 2 秒）
+for t, text in ((T2 + 0.5, "我不是@6 了吗？怎么还是发给你了"), (T2 + 60.5, "算了还是开头是@ 比较好")):
+    real, crcore.now = crcore.now, lambda t=t: t
+    crcore.note_sent({"sessionId": SID4}, text)
+    crcore.now = real
+busyA = dict(E, sessionId=SID4, pid=997, status="busy", statusAt=T2)
+r = crcore.Remote()
+r.state["remote_pending"] = {NA: T2}
+r.state["pending_from"] = {NA: [T2, T2]}
+crcore.save_json(crcore.PENDING, {NA: "old-card"})
+close = r.pend_since(NA, T2 + 59.5, busyA)
+frozen = json.dumps(close.card, ensure_ascii=False) if close else ""
+check("助手：又发一句时旧卡片定格成到这句为止的回复：整段回复都在、标出这段用时，下面一行说接着看新卡片；新那句不混进来",
+      close is not None and "交给 8 号去修了" in frozen and "修好后我告诉你" in frozen and "这段用时" in frozen
+      and "下面的新卡片" in frozen and "我不是@6" in frozen and "算了还是开头" not in frozen and close.reply_for == NA, frozen[:900])
+check("助手：新卡片只从这句算起，不并进上一张", r.state["pending_from"][NA] == [T2 + 59.5, T2 + 59.5], r.state["pending_from"])
+fresh = json.dumps(r.live_card(NA, busyA, T2 + 59.5).card, ensure_ascii=False)
+check("助手：新卡片里是新那句，上一段的回复不重复", "算了还是开头" in fresh and "修好后我告诉你" not in fresh, fresh[:900])
+live = crcore.Card({}, "live")
+live.close_old = close
+fb = FakeFeishu()
+crbot.Feishu.retire(fb, "old-card", live)
+check("助手：旧卡片原地换成定格的样子，不撤回", fb.log == [("patch", "old-card")], fb.log)
+crcore.save_json(crcore.PENDING, {})
 
 # 13. 不是守护进程（员工自己写脚本直接调 crcore 发话）：不能算「你 · 飞书」，记成 cli、写上是哪个员工
 real_caller, crcore.caller_name = crcore.caller_name, lambda: "crew-x"
@@ -498,7 +632,14 @@ times = [c["columns"][1]["elements"][0]["content"] for c in sets]
 check("看板：时间今天写 HH:MM", all(re.search(r"\d\d:\d\d", t) for t in times), times)
 check("看板：每行放得下（手机上不折行）", all(crcore.text_em(re.sub(r"<[^>]+>|\*\*", "", x)) <= crcore.LINE_EM - 3
                                      for x in "\n".join(left).split("\n"))
-      and all(crcore.text_em(n) <= crcore.NOTE_EM for n in notes))
+      and all(crcore.text_em(n) <= crcore.NOTE_EM for n in notes if not n.startswith(("久没动静", "下班"))))
+reg0 = crcore.load_json(crcore.REGISTRY, {})
+crcore.save_json(crcore.REGISTRY, dict(reg0, **{f"exp-run:{i}": dict(base, alive=False, died=now_t - 3700 - i) for i in range(10)}))
+notes2 = [e["elements"][0]["content"] for e in crcore.Remote().status_card().card["elements"] if e["tag"] == "note"]
+off_line = next((n for n in notes2 if n.startswith("下班")), "")
+check("看板：下班 / 久没动静的再多也一个不落全列出来（放不下就折行），不写「…」", off_line.startswith("下班 11：")
+      and "…" not in off_line and "gone" in off_line and all(f"exp-run:{i}" in off_line for i in range(10)), off_line)
+crcore.save_json(crcore.REGISTRY, reg0)
 bar = [e for e in els if e["tag"] == "action"][-1]["actions"]
 check("看板底下：「选员工」下拉（下班的也在）+ 〔看攒下的 17〕，其余在「···」", bar[0]["tag"] == "select_static"
       and bar[0]["placeholder"]["content"] == "选员工" and "#enter gone" in [o["value"] for o in bar[0]["options"]]

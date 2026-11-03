@@ -668,10 +668,6 @@ def last_human_text(path):
         size *= 4
 
 
-def user_spoke_since(path, t):
-    return any(ts >= t for ts, _ in user_texts(path, 1 << 20))
-
-
 def is_human(e):
     """rollout 里这一条是不是人说的话（peer_tick 用来知道你在电脑上跟它说话了）。"""
     return _item(e).get("type") == "UserMessage" and bool(_text(_item(e)))
